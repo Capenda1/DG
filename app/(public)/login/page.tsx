@@ -131,6 +131,10 @@ export default function LoginPage() {
         setMfaCode("");
         return;
       }
+      if (!("user" in result) || !result.user) {
+        setError("Resposta de login inválida. Tente novamente.");
+        return;
+      }
       await finishLogin(result);
     } catch (err) {
       let message =
