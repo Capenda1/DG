@@ -1,0 +1,24 @@
+# Dádiva Go — Caddy (HTTPS → Next BFF :3000)
+#
+# Instalação típica (VPS):
+#   1. Copiar este ficheiro para /etc/caddy/Caddyfile
+#   2. Substituir app.seudominio.com pelo domínio real
+#   3. systemctl reload caddy
+#
+# A API Nest NÃO é publicada aqui — o Next faz proxy via INTERNAL_API_URL.
+
+app.seudominio.com {
+	encode gzip zstd
+
+	header {
+		# Reforço extra (o Next também envia security headers)
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	reverse_proxy 127.0.0.1:3000 {
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+}

@@ -1,0 +1,101 @@
+# Dádiva Go — stack de produção (sem Mailpit; secrets via .env.prod)
+#
+# Pré-requisitos:
+#   cp env.prod.sample .env.prod   # na pasta backend/
+#   Editar .env.prod com JWT, SMTP, CORS, etc.
+#
+# Arranque:
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+#
+# Migrações: correm automaticamente no entrypoint da API (prisma migrate deploy).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: dadiva-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dadiva}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD em .env.prod}
+      POSTGRES_DB: ${POSTGRES_DB:-dadiva}
+    volumes:
+      - dadiva_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'pg_isready -U ${POSTGRES_USER:-dadiva} -d ${POSTGRES_DB:-dadiva}',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: dadiva-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env.prod
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-dadiva}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-dadiva}?schema=public
+      UPLOAD_DIR: uploads
+      MFA_REQUIRE_ADMIN: ${MFA_REQUIRE_ADMIN:-true}
+    # Só rede interna — o frontend (BFF) acede via http://api:4000.
+    # Para health-check no host (debug): descomente e use 127.0.0.1 (nunca 0.0.0.0).
+    # ports:
+    #   - '127.0.0.1:4000:4000'
+    expose:
+      - '4000'
+    volumes:
+      - dadiva_uploads:/app/uploads
+    networks:
+      - internal
+
+  frontend:
+    build:
+      context: ../
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?Defina NEXT_PUBLIC_API_URL em .env.prod}
+    container_name: dadiva-frontend
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      NODE_ENV: production
+      JWT_SECRET: ${JWT_SECRET:?Defina JWT_SECRET em .env.prod}
+      INTERNAL_API_URL: http://api:4000
+    ports:
+      - '${FRONTEND_PORT:-3000}:3000'
+    networks:
+      - internal
+
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    container_name: dadiva-ai
+    restart: unless-stopped
+    environment:
+      CORS_ORIGINS: ${AI_CORS_ORIGINS:-}
+      AI_SERVICE_API_KEY: ${AI_SERVICE_API_KEY:-}
+    expose:
+      - '8000'
+    networks:
+      - internal
+
+volumes:
+  dadiva_pg_data:
+  dadiva_uploads:
+
+networks:
+  internal:
+    driver: bridge

@@ -1,0 +1,106 @@
+# Dádiva Go — Stack de desenvolvimento local
+#
+# Uso rápido (só base de dados):
+#   docker compose up -d postgres
+#
+# Base de dados + Mailpit (SMTP local para emails de recuperação):
+#   docker compose up -d postgres mailpit
+#
+# Stack completo (desenvolvimento):
+#   docker compose up -d
+#
+# Produção: use docker-compose.prod.yml (ver docs/DEPLOY.md)
+#
+# Variáveis de ambiente da API: copie api/env.sample para api/.env antes de usar.
+
+services:
+  # ── Base de dados ───────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: dadiva-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dadiva
+      POSTGRES_PASSWORD: dadiva
+      POSTGRES_DB: dadiva
+    ports:
+      - '5432:5432'
+    volumes:
+      - dadiva_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U dadiva -d dadiva']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Mailpit (SMTP de desenvolvimento) ───────────────────────────────────────
+  # UI: http://localhost:8025  |  SMTP: localhost:1025 (sem autenticação)
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: dadiva-mailpit
+    restart: unless-stopped
+    ports:
+      - '1025:1025'
+      - '8025:8025'
+
+  # ── API NestJS ───────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: dadiva-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://dadiva:dadiva@postgres:5432/dadiva?schema=public
+      # Substitua pelas variáveis reais em produção (use um ficheiro .env ou secrets):
+      JWT_SECRET: ${JWT_SECRET:-altere-para-uma-string-longa-e-aleatoria}
+      JWT_ACCESS_EXPIRES: ${JWT_ACCESS_EXPIRES:-15m}
+      JWT_REFRESH_EXPIRES_DAYS: ${JWT_REFRESH_EXPIRES_DAYS:-7}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+      BOOTSTRAP_ADMIN_SECRET: ${BOOTSTRAP_ADMIN_SECRET:-}
+      UPLOAD_DIR: uploads
+      MAX_MODELAGEM_UPLOAD_MB: 15
+      MAIL_PROVIDER: ${MAIL_PROVIDER:-smtp}
+      MAIL_FROM: ${MAIL_FROM:-Dádiva Go <noreply@dadiva.local>}
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_REQUIRE_TLS: ${SMTP_REQUIRE_TLS:-false}
+    ports:
+      - '4000:4000'
+    volumes:
+      - dadiva_uploads:/app/uploads
+
+  # ── Frontend Next.js ─────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ../
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
+    container_name: dadiva-frontend
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      NODE_ENV: production
+    ports:
+      - '3000:3000'
+
+  # ── Serviço IA FastAPI ────────────────────────────────────────────────────────
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    container_name: dadiva-ai
+    restart: unless-stopped
+    ports:
+      - '8000:8000'
+
+volumes:
+  dadiva_pg_data:
+  dadiva_uploads:

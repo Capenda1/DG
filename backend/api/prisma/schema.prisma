@@ -1,0 +1,834 @@
+// Dádiva Go — modelo relacional alinhado ao fluxo pedido → arte → produção → envio
+// Ver docs/PLATAFORMA-DADIVA-GO.md (papéis, estados, rastreabilidade).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  CLIENT
+  DESIGNER
+  ATTENDANT
+  ADMIN
+  /// Colaborador interno (RH, ponto, salários) sem login na aplicação.
+  COLLABORATOR
+}
+
+/// Origem do pedido: fluxo online (cliente) ou balcão / PDV.
+enum OrderOrigin {
+  ONLINE @map("online")
+  BALCAO @map("balcao")
+}
+
+/// Fases do pedido (fluxo simplificado — entrega local)
+enum OrderStatus {
+  DRAFT
+  SUBMITTED
+  VALIDATION_PAYMENT
+  APPROVED
+  IN_PRODUCTION
+  FINISHED
+  DELIVERED
+  CANCELLED
+}
+
+enum ArtVersionStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+  SUPERSEDED
+  REJECTED
+}
+
+enum ProductionProcess {
+  SUBLIMATION
+  DTF
+  /// Venda directa ao balcão (insumos / retalho) sem produção téxtil configurada aqui.
+  STORE_RETAIL
+}
+
+enum AnnotationKind {
+  COMMENT
+  INTERNAL_NOTE
+  ATTACHMENT_REF
+}
+
+enum OrderSlaType {
+  DESIGN_REVIEW
+  CLIENT_RESPONSE
+  PRODUCTION
+  SHIPPING
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  STATUS_CHANGE
+  APPROVE_ART
+  LOGIN
+  LOGOUT
+  SESSION_REVOKE
+}
+
+enum ProductStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+/// Família de catálogo (define UI e regras de variantes no admin).
+enum CatalogFamily {
+  VESTUARIO
+  CANECA
+  IMPRESSAO_PLANA
+  SERVICO
+  GENERICO
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  SMS
+  WHATSAPP
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  READ
+}
+
+/// Modelo de PDF emitido (alinhado ao frontend `InvoiceDocumentModel`).
+enum InvoiceDocumentModel {
+  FACTURA_POR_FORMA
+  FACTURA_RECIBO
+  FACTURA
+}
+
+enum OrderDocumentIssueAction {
+  PRINT
+  DOWNLOAD
+  SHARE
+}
+
+model User {
+  id            String   @id @default(uuid()) @db.Uuid
+  email         String   @unique
+  name          String
+  passwordHash  String   @map("password_hash")
+  role          UserRole
+  mfaEnabled Boolean  @default(false) @map("mfa_enabled")
+  /** Secret TOTP cifrado (AES-256-GCM) — nunca expor em APIs. */
+  mfaSecretEnc String? @map("mfa_secret_enc")
+  /** JSON array de hashes bcrypt dos códigos de recuperação. */
+  mfaRecoveryHashes String? @map("mfa_recovery_hashes")
+  phone      String?
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  ordersAsClient      Order[]  @relation("OrderClient")
+  ordersAsDesigner    Order[]  @relation("OrderDesigner")
+  ordersAsAttendant   Order[]  @relation("OrderAttendant")
+  orderClientFiles    OrderClientFile[]
+  artVersionsCreated  ArtVersion[] @relation("ArtVersionCreatedBy")
+  artVersionsApproved ArtVersion[] @relation("ArtVersionApprovedBy")
+  annotations         Annotation[]
+  checklistChecked    TechnicalChecklistItem[] @relation("ChecklistCheckedBy")
+  auditLogs           AuditLog[]
+  sessions            UserSession[]
+  passwordResetTokens PasswordResetToken[]
+  notifications       Notification[]           @relation("NotificationRecipient")
+  notificationsSent   Notification[]           @relation("NotificationSentBy")
+  designTemplates     DesignTemplate[]
+  clientGalleryItems  ClientGalleryItem[]
+  messagesSent        Message[]                @relation("MessageSender")
+  movimentosInsumo    MovimentoInsumo[]        @relation("MovimentoInsumoUser")
+  ordersDelivered   Order[]                  @relation("OrderDeliveredBy")
+  pdvCashSessionsOpened   PdvCashSession[]       @relation("PdvCashSessionOpenedBy")
+  pdvCashSessionsClosed   PdvCashSession[]       @relation("PdvCashSessionClosedBy")
+  financialLedgerEntries  FinancialLedgerEntry[]
+  cashFlowProjectionsCreated CashFlowProjection[] @relation("CashFlowProjectionCreatedBy")
+  orderDocumentsIssued OrderDocumentIssue[] @relation("OrderDocumentIssuedBy")
+
+  @@map("users")
+}
+
+/// Linha imutável do razão de vendas / receitas (após pagamento registado).
+enum FinancialLedgerEntryType {
+  SALE_PAYMENT   @map("sale_payment")
+  /// Entrada manual de dinheiro no cofre durante o turno (suprimento).
+  PDV_SUPPLEMENT @map("pdv_supplement")
+  /// Saída de numerário registada pelo operador (valor armazenado negativo para o esperado).
+  PDV_WITHDRAWAL @map("pdv_withdrawal")
+  /// Outros recebimentos (aportes, serviços, etc.) registados pela tesouraria.
+  CASH_RECEIPT_OTHER @map("cash_receipt_other")
+  /// Despesas operacionais (fornecedor, rendas, etc.) — valores armazenados negativos.
+  CASH_EXPENSE @map("cash_expense")
+}
+
+/// Previsões de entrada/saída para planeamento de tesouraria.
+enum CashFlowProjectionDirection {
+  IN  @map("in")
+  OUT @map("out")
+}
+
+enum PdvCashSessionStatus {
+  OPEN   @map("open")
+  CLOSED @map("closed")
+}
+
+model FinancialLedgerEntry {
+  id             String                   @id @default(uuid()) @db.Uuid
+  entryType      FinancialLedgerEntryType @map("entry_type")
+  amount         Decimal                  @db.Decimal(12, 2)
+  currency       String                   @default("AOA") @db.Char(3)
+  orderId        String?                  @map("order_id") @db.Uuid
+  userId         String?                  @map("user_id") @db.Uuid
+  pdvSessionId   String?                  @map("pdv_session_id") @db.Uuid
+  reference      String?                  @db.VarChar(64)
+  metadata       Json?                    @db.JsonB
+  createdAt      DateTime                 @default(now()) @map("created_at")
+
+  order       Order?          @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  user        User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  pdvSession  PdvCashSession? @relation(fields: [pdvSessionId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([orderId])
+  @@index([pdvSessionId])
+  @@index([entryType, createdAt])
+  @@map("financial_ledger_entries")
+}
+
+/// Turno de caixa PDV (um único OPEN permitido na aplicação).
+model PdvCashSession {
+  id             String              @id @default(uuid()) @db.Uuid
+  status         PdvCashSessionStatus
+  openingFloat   Decimal             @map("opening_float") @db.Decimal(12, 2)
+  openedById     String              @map("opened_by_id") @db.Uuid
+  openedAt       DateTime            @default(now()) @map("opened_at")
+  closedById     String?             @map("closed_by_id") @db.Uuid
+  closedAt       DateTime?           @map("closed_at")
+  declaredCash   Decimal?            @map("declared_cash") @db.Decimal(12, 2)
+  expectedCash   Decimal?            @map("expected_cash") @db.Decimal(12, 2)
+  cashDifference Decimal?            @map("cash_difference") @db.Decimal(12, 2)
+  closeNotes     String?             @map("close_notes")
+  /// Snapshot do relatório de fecho (Z de caixa) no momento em que o turno fecha.
+  closingSnapshot Json?              @map("closing_snapshot")
+
+  openedBy       User                  @relation("PdvCashSessionOpenedBy", fields: [openedById], references: [id])
+  closedBy       User?                 @relation("PdvCashSessionClosedBy", fields: [closedById], references: [id])
+  ledgerEntries  FinancialLedgerEntry[]
+
+  @@index([status])
+  @@index([openedAt])
+  @@map("pdv_cash_sessions")
+}
+
+/// Saldo inicial registado pela tesouraria para uma data civil (opcional por período).
+model TreasuryOpeningBalance {
+  id           String   @id @default(uuid()) @db.Uuid
+  snapshotDate DateTime @unique @map("snapshot_date") @db.Date
+  amount       Decimal  @map("amount") @db.Decimal(12, 2)
+  currency     String   @default("AOA") @db.Char(3)
+  notes        String?  @db.VarChar(2000)
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("treasury_opening_balances")
+}
+
+/// Previsão de entrada ou saída (tesouraria / planeamento).
+model CashFlowProjection {
+  id            String                       @id @default(uuid()) @db.Uuid
+  expectedDate  DateTime                     @map("expected_date") @db.Date
+  direction     CashFlowProjectionDirection
+  amount        Decimal                      @db.Decimal(12, 2)
+  currency      String                       @default("AOA") @db.Char(3)
+  category      String                       @db.VarChar(160)
+  description   String?                      @db.VarChar(2000)
+  createdAt     DateTime                     @default(now()) @map("created_at")
+  createdById   String                       @map("created_by_id") @db.Uuid
+  createdBy     User                         @relation("CashFlowProjectionCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([expectedDate])
+  @@map("cash_flow_projections")
+}
+
+enum PaymentMethod {
+  BANK_TRANSFER_SAME    @map("BANK_TRANSFER_SAME")
+  DEPOSIT               @map("DEPOSIT")
+  BANK_TRANSFER_EXPRESS @map("BANK_TRANSFER_EXPRESS")
+  CASH_ON_SITE          @map("CASH_ON_SITE")
+  /// Pagamento físico no balcão — sem comprovativo digital obrigatório.
+  PDV_CASH              @map("PDV_CASH")
+  PDV_DEBIT_CARD        @map("PDV_DEBIT_CARD")
+  PDV_CREDIT_CARD       @map("PDV_CREDIT_CARD")
+}
+
+model Order {
+  id            String         @id @default(uuid()) @db.Uuid
+  orderNumber   String         @unique @map("order_number")
+  clientId      String         @map("client_id") @db.Uuid
+  designerId    String?        @map("designer_id") @db.Uuid
+  /// Quem registou o pedido no balcão (PDV), quando aplicável.
+  attendantId   String?        @map("attendant_id") @db.Uuid
+  orderOrigin   OrderOrigin    @default(ONLINE) @map("order_origin")
+  status        OrderStatus    @default(DRAFT)
+  totalAmount   Decimal        @default(0) @map("total_amount") @db.Decimal(12, 2)
+  /// Desconto em moeda (PDV). O total pago é subtotal das linhas menos este valor (≥ 0).
+  discountAmount Decimal      @default(0) @map("discount_amount") @db.Decimal(12, 2)
+  currency      String         @default("AOA") @db.Char(3)
+  paymentMethod    PaymentMethod? @map("payment_method")
+  paymentProofKey  String?        @map("payment_proof_key")
+  paymentProofName String?        @map("payment_proof_name")
+  paymentProofMime String?        @map("payment_proof_mime")
+  /// Código de rastreio agregado (pode redundar com shipping.tracking_code)
+  trackingCode     String?        @map("tracking_code")
+  notes         String?
+  /// Data/hora de recepção do pedido (PDV — preenchida manualmente pelo atendente).
+  receptionDate DateTime?      @map("reception_date")
+  /// Especificações extra da modelagem (JSON v1 — ver `orders.service` / parse `modelagemSpecs`).
+  modelagemSpecs    Json?    @map("modelagem_specs")
+  /// Rascunho de balcão (DRAFT) visível à equipa de design para continuar modelagem antes do pagamento.
+  draftSharedWithDesignTeam Boolean @default(false) @map("draft_shared_with_design_team")
+  /// Quem registou a entrega ao cliente (última fase do fluxo).
+  deliveredById String?        @map("delivered_by_id") @db.Uuid
+  deliveredAt   DateTime?      @map("delivered_at")
+  /// Último documento PDF registado (factura / recibo / por forma).
+  lastDocumentModel    InvoiceDocumentModel? @map("last_document_model")
+  lastDocumentNumber   String?               @map("last_document_number")
+  lastDocumentIssuedAt DateTime?             @map("last_document_issued_at")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+
+  client      User              @relation("OrderClient", fields: [clientId], references: [id])
+  designer    User?             @relation("OrderDesigner", fields: [designerId], references: [id])
+  attendant   User?             @relation("OrderAttendant", fields: [attendantId], references: [id])
+  deliveredBy User?             @relation("OrderDeliveredBy", fields: [deliveredById], references: [id])
+  items       OrderItem[]
+  clientModelagemFiles OrderClientFile[]
+  artVersions ArtVersion[]
+  slas        OrderSla[]
+  consumables ConsumableUsage[]
+  shipping    Shipping?
+  auditLogs   AuditLog[]
+  notifications Notification[]
+  messages    Message[]
+  movimentosInsumo MovimentoInsumo[]
+  financialLedgerEntries FinancialLedgerEntry[]
+  documentIssues         OrderDocumentIssue[]
+
+  @@index([clientId])
+  @@index([designerId])
+  @@index([attendantId])
+  @@index([deliveredById])
+  @@index([status])
+  @@index([createdAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id                String            @id @default(uuid()) @db.Uuid
+  orderId           String            @map("order_id") @db.Uuid
+  productVariantId  String?           @map("product_variant_id") @db.Uuid
+  printAreaId       String?           @map("print_area_id") @db.Uuid
+  skuCode           String?           @map("sku_code")
+  productName       String            @map("product_name")
+  quantity          Int               @default(1)
+  unitPrice         Decimal           @map("unit_price") @db.Decimal(12, 2)
+  productionProcess ProductionProcess @map("production_process")
+  /// Snapshot de opções (tamanho, cor, área de impressão, etc.)
+  metadata          Json?             @db.JsonB
+
+  order            Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productVariant   ProductVariant?   @relation(fields: [productVariantId], references: [id], onDelete: SetNull)
+  printArea        PrintAreaTemplate? @relation(fields: [printAreaId], references: [id], onDelete: SetNull)
+  consumableUsages ConsumableUsage[]
+
+  @@index([orderId])
+  @@index([productVariantId])
+  @@index([printAreaId])
+  @@map("order_items")
+}
+
+/// Ficheiros enviados pelo cliente na área de modelagem (arte de apoio, logos, etc.).
+model OrderClientFile {
+  id           String   @id @default(uuid()) @db.Uuid
+  orderId      String   @map("order_id") @db.Uuid
+  originalName String   @map("original_name")
+  storageKey   String   @map("storage_key")
+  mimeType     String   @map("mime_type")
+  sizeBytes    Int      @map("size_bytes")
+  uploadedById String   @map("uploaded_by_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  order      Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  uploadedBy User  @relation(fields: [uploadedById], references: [id])
+
+  @@index([orderId])
+  @@map("order_client_files")
+}
+
+model Product {
+  id          String        @id @default(uuid()) @db.Uuid
+  code        String        @unique
+  name        String
+  description String?
+  /// Família de catálogo (vestuário, caneca, impressão, serviço, genérico).
+  catalogFamily CatalogFamily @default(GENERICO) @map("catalog_family")
+  /// Configuração por família (ex.: `{ "garmentType": "T_SHIRT" }` para vestuário).
+  familyConfig  Json?         @map("family_config") @db.JsonB
+  /// Preços oficiais por cor: `{ "COR_ID": { "adult": number, "child"?: number } }` (Kwanza).
+  colorPrices Json?         @map("color_prices") @db.JsonB
+  status      ProductStatus @default(ACTIVE)
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+
+  variants   ProductVariant[]
+  printAreas PrintAreaTemplate[]
+
+  @@index([status])
+  @@map("products")
+}
+
+model ProductVariant {
+  id               String             @id @default(uuid()) @db.Uuid
+  productId        String             @map("product_id") @db.Uuid
+  sku              String             @unique
+  size             String?
+  baseColor        String?            @map("base_color")
+  /// Processo de impressão (obrigatório para novas variantes; usado ao criar linhas de pedido).
+  productionProcess ProductionProcess? @map("production_process")
+  /// Tipo de peça para mockup/modelagem (ex.: T_SHIRT, POLO, COLETE).
+  garmentType      String?            @map("garment_type")
+  unitPrice        Decimal            @map("unit_price") @db.Decimal(12, 2)
+  currency         String             @default("AOA") @db.Char(3)
+  metadata         Json?              @db.JsonB
+  active           Boolean            @default(true)
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  product          Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  orderItems       OrderItem[]
+
+  @@index([productId])
+  @@index([active])
+  @@map("product_variants")
+}
+
+model PrintAreaTemplate {
+  id                    String            @id @default(uuid()) @db.Uuid
+  productId             String            @map("product_id") @db.Uuid
+  code                  String
+  name                  String
+  productionProcess     ProductionProcess @map("production_process")
+  widthMm               Int               @map("width_mm")
+  heightMm              Int               @map("height_mm")
+  safeMarginMm          Int?              @map("safe_margin_mm")
+  minRecommendedDpi     Int?              @map("min_recommended_dpi")
+  colorProfileHint      String?           @map("color_profile_hint")
+  maxFileSizeMb         Int?              @map("max_file_size_mb")
+  instructions          String?
+  active                Boolean           @default(true)
+  createdAt             DateTime          @default(now()) @map("created_at")
+  updatedAt             DateTime          @updatedAt @map("updated_at")
+
+  product               Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+  orderItems            OrderItem[]
+
+  @@unique([productId, code, productionProcess])
+  @@index([productId])
+  @@index([productionProcess])
+  @@map("print_area_templates")
+}
+
+/// Versão imutável lógica da arte (ficheiro em S3 referenciado por storageKey)
+model ArtVersion {
+  id           String           @id @default(uuid()) @db.Uuid
+  orderId      String           @map("order_id") @db.Uuid
+  versionIndex Int              @map("version_index")
+  status       ArtVersionStatus @default(DRAFT)
+  storageKey   String?          @map("storage_key")
+  previewKey   String?          @map("preview_key")
+  /// Camadas da modelagem (JSON) — permite reabrir o editor com o mesmo design.
+  layersJson   Json?            @map("layers_json")
+  checksum     String?
+  createdById  String           @map("created_by_id") @db.Uuid
+  approvedById String?          @map("approved_by_id") @db.Uuid
+  approvedAt   DateTime?        @map("approved_at")
+  createdAt    DateTime         @default(now()) @map("created_at")
+
+  order          Order                    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  createdBy      User                     @relation("ArtVersionCreatedBy", fields: [createdById], references: [id])
+  approvedBy     User?                    @relation("ArtVersionApprovedBy", fields: [approvedById], references: [id])
+  annotations    Annotation[]
+  checklistItems TechnicalChecklistItem[]
+
+  @@unique([orderId, versionIndex])
+  @@index([orderId])
+  @@index([status])
+  @@map("art_versions")
+}
+
+/// Comentários / notas por versão de arte (thread simples via parentId)
+model Annotation {
+  id            String          @id @default(uuid()) @db.Uuid
+  artVersionId  String          @map("art_version_id") @db.Uuid
+  authorId      String          @map("author_id") @db.Uuid
+  parentId      String?         @map("parent_id") @db.Uuid
+  kind          AnnotationKind  @default(COMMENT)
+  body          String
+  attachmentKey String?         @map("attachment_key")
+  createdAt     DateTime        @default(now()) @map("created_at")
+  updatedAt     DateTime        @updatedAt @map("updated_at")
+
+  artVersion ArtVersion   @relation(fields: [artVersionId], references: [id], onDelete: Cascade)
+  author     User         @relation(fields: [authorId], references: [id])
+  parent     Annotation?  @relation("AnnotationThread", fields: [parentId], references: [id])
+  replies    Annotation[] @relation("AnnotationThread")
+
+  @@index([artVersionId])
+  @@index([authorId])
+  @@map("annotations")
+}
+
+/// Itens de checklist técnico por versão (sublimação/DTF, margens, resolução, etc.)
+model TechnicalChecklistItem {
+  id           String    @id @default(uuid()) @db.Uuid
+  artVersionId String    @map("art_version_id") @db.Uuid
+  code         String
+  label        String
+  required     Boolean   @default(true)
+  checked      Boolean   @default(false)
+  checkedById  String?   @map("checked_by_id") @db.Uuid
+  checkedAt    DateTime? @map("checked_at")
+  sortOrder    Int       @default(0) @map("sort_order")
+
+  artVersion ArtVersion @relation(fields: [artVersionId], references: [id], onDelete: Cascade)
+  checkedBy  User?      @relation("ChecklistCheckedBy", fields: [checkedById], references: [id])
+
+  @@index([artVersionId])
+  @@map("technical_checklist_items")
+}
+
+/// Marcos de SLA / promessa por pedido
+model OrderSla {
+  id        String       @id @default(uuid()) @db.Uuid
+  orderId   String       @map("order_id") @db.Uuid
+  type      OrderSlaType
+  dueAt     DateTime     @map("due_at")
+  metAt     DateTime?    @map("met_at")
+  breached  Boolean      @default(false)
+  notes     String?
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([dueAt])
+  @@map("order_slas")
+}
+
+model ConsumableUsage {
+  id          String  @id @default(uuid()) @db.Uuid
+  orderId     String  @map("order_id") @db.Uuid
+  orderItemId String? @map("order_item_id") @db.Uuid
+  code        String
+  description String?
+  quantity    Decimal @db.Decimal(12, 3)
+  unit        String  @db.VarChar(16)
+
+  order     Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderItem OrderItem? @relation(fields: [orderItemId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+  @@map("consumable_usage")
+}
+
+model Shipping {
+  id              String    @id @default(uuid()) @db.Uuid
+  orderId         String    @unique @map("order_id") @db.Uuid
+  carrier         String?
+  service         String?
+  trackingCode    String?   @map("tracking_code")
+  addressLine1    String    @map("address_line1")
+  addressLine2    String?   @map("address_line2")
+  city            String
+  region          String?
+  postalCode      String    @map("postal_code")
+  country         String    @db.Char(2)
+  recipientName   String    @map("recipient_name")
+  recipientPhone  String?   @map("recipient_phone")
+  shippedAt       DateTime? @map("shipped_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@map("shipping")
+}
+
+/// Trilha append-only de eventos relevantes (aprovações, mudanças de estado, etc.)
+model AuditLog {
+  id         String      @id @default(uuid()) @db.Uuid
+  entityType String      @map("entity_type")
+  entityId   String      @map("entity_id")
+  action     AuditAction
+  userId     String?     @map("user_id") @db.Uuid
+  orderId    String?     @map("order_id") @db.Uuid
+  payload    Json?       @db.JsonB
+  createdAt  DateTime    @default(now()) @map("created_at")
+
+  user  User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+  order Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId])
+  @@index([orderId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model UserSession {
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @map("user_id") @db.Uuid
+  refreshTokenHash String    @map("refresh_token_hash")
+  expiresAt        DateTime  @map("expires_at")
+  ip               String?
+  userAgent        String?   @map("user_agent")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  revokedAt        DateTime? @map("revoked_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("user_sessions")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
+}
+
+enum DesignTemplateCategory {
+  ANIVERSARIOS
+  MARCO_MULHER
+  FIM_DE_ANO
+  FINALISTAS
+  GRUPOS
+  IGREJAS
+  OUTROS
+}
+
+/// Templates de design prontos, carregados por Admin/Designer e usados no editor de modelagem.
+model DesignTemplate {
+  id          String                   @id @default(uuid()) @db.Uuid
+  title       String
+  description String?
+  category    DesignTemplateCategory   @default(OUTROS)
+  garmentType String?                  @map("garment_type")
+  previewKey  String?                  @map("preview_key")
+  layersJson  Json                     @map("layers_json") @db.JsonB
+  active      Boolean                  @default(true)
+  sortOrder   Int                      @default(0) @map("sort_order")
+  createdById String                   @map("created_by_id") @db.Uuid
+  createdAt   DateTime                 @default(now()) @map("created_at")
+  updatedAt   DateTime                 @updatedAt @map("updated_at")
+
+  createdBy   User                     @relation(fields: [createdById], references: [id])
+
+  @@index([active, sortOrder])
+  @@index([category])
+  @@map("design_templates")
+}
+
+/// Imagens da galeria na área do cliente (slideshow em /conta).
+model ClientGalleryItem {
+  id          String   @id @default(uuid()) @db.Uuid
+  title       String
+  description String?
+  imageKey    String   @map("image_key")
+  active      Boolean  @default(true)
+  sortOrder   Int      @default(0) @map("sort_order")
+  createdById String   @map("created_by_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  createdBy   User     @relation(fields: [createdById], references: [id])
+
+  @@index([active, sortOrder])
+  @@map("client_gallery_items")
+}
+
+model Notification {
+  id            String              @id @default(uuid()) @db.Uuid
+  recipientId   String              @map("recipient_id") @db.Uuid
+  orderId       String?             @map("order_id") @db.Uuid
+  channel       NotificationChannel
+  status        NotificationStatus  @default(PENDING)
+  title         String
+  body          String
+  metadata      Json?               @db.JsonB
+  sentById      String?             @map("sent_by_id") @db.Uuid
+  sentAt        DateTime?           @map("sent_at")
+  readAt        DateTime?           @map("read_at")
+  createdAt     DateTime            @default(now()) @map("created_at")
+  updatedAt     DateTime            @updatedAt @map("updated_at")
+
+  recipient     User                @relation("NotificationRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  sentBy        User?               @relation("NotificationSentBy", fields: [sentById], references: [id], onDelete: SetNull)
+  order         Order?              @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([recipientId, status])
+  @@index([orderId])
+  @@index([channel, status])
+  @@map("notifications")
+}
+
+model Message {
+  id        String    @id @default(uuid()) @db.Uuid
+  orderId   String    @map("order_id") @db.Uuid
+  senderId  String    @map("sender_id") @db.Uuid
+  content   String
+  readAt    DateTime? @map("read_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  order  Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  sender User  @relation("MessageSender", fields: [senderId], references: [id])
+
+  @@index([orderId, createdAt])
+  @@map("messages")
+}
+
+model Setting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("settings")
+}
+
+/* ─────────────────────────────────────────────
+   GESTÃO DE INSUMOS (Níveis 1 e 2)
+   ───────────────────────────────────────────── */
+
+enum MovimentoTipo {
+  ENTRADA          /// Reposição / compra
+  SAIDA_MANUAL     /// Baixa manual (perda, ajuste)
+  SAIDA_PEDIDO     /// Desconto automático ao aprovar pedido
+}
+
+/// Catálogo de insumos com stock actual
+model Insumo {
+  id          String   @id @default(uuid()) @db.Uuid
+  nome        String
+  /// Valor livre (ex.: TECIDO ou texto cadastrado na UI).
+  categoria   String   @default("OUTRO") @db.VarChar(64)
+  unidade     String   @default("un") @db.VarChar(32)
+  /// Preço de compra / custo de referência
+  custoUnit   Decimal  @default(0) @map("custo_unit") @db.Decimal(12, 2)
+  precoVenda  Decimal? @map("preco_venda") @db.Decimal(12, 2)
+  stockActual Decimal  @default(0) @map("stock_actual") @db.Decimal(12, 3)
+  stockMinimo Decimal  @default(0) @map("stock_minimo") @db.Decimal(12, 3)
+  fornecedor  String?  @db.VarChar(120)
+  marca       String?  @db.VarChar(120)
+  notas       String?
+  activo      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  movimentos MovimentoInsumo[]
+  consumos   InsumoConsumo[]
+
+  @@index([activo])
+  @@index([categoria])
+  @@map("insumos")
+}
+
+/// Histórico de movimentos de stock
+model MovimentoInsumo {
+  id        String        @id @default(uuid()) @db.Uuid
+  insumoId  String        @map("insumo_id") @db.Uuid
+  tipo      MovimentoTipo
+  quantidade Decimal      @db.Decimal(12, 3)
+  custoUnit  Decimal?     @map("custo_unit") @db.Decimal(12, 2)
+  nota       String?
+  orderId    String?      @map("order_id") @db.Uuid
+  userId     String       @map("user_id") @db.Uuid
+  createdAt  DateTime     @default(now()) @map("created_at")
+
+  insumo Insumo @relation(fields: [insumoId], references: [id], onDelete: Cascade)
+  order  Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  user   User   @relation("MovimentoInsumoUser", fields: [userId], references: [id])
+
+  @@index([insumoId, createdAt])
+  @@index([orderId])
+  @@map("movimentos_insumo")
+}
+
+/// Regras de consumo automático por tipo de produto (Nível 2)
+model InsumoConsumo {
+  id           String  @id @default(uuid()) @db.Uuid
+  insumoId     String  @map("insumo_id") @db.Uuid
+  /// Tipo de peça: T_SHIRT, POLO, COLETE, ou null = aplica a todos
+  tipoProduto  String? @map("tipo_produto")
+  /// Processo: SUBLIMATION, DTF, ou null = aplica a todos
+  processo     String? @db.VarChar(32)
+  /// Quantidade consumida por unidade de pedido
+  qtdPorUnidade Decimal @map("qtd_por_unidade") @db.Decimal(12, 4)
+
+  insumo Insumo @relation(fields: [insumoId], references: [id], onDelete: Cascade)
+
+  @@index([insumoId])
+  @@map("insumos_consumo")
+}
+
+/// Contador anual por tipo de documento (FR/FF/FT-AAAA-NNNNNN).
+model OrderDocumentSequence {
+  id        String               @id @default(uuid()) @db.Uuid
+  year      Int
+  model     InvoiceDocumentModel
+  lastSeq   Int                  @default(0) @map("last_seq")
+  updatedAt DateTime             @updatedAt @map("updated_at")
+
+  @@unique([year, model])
+  @@map("order_document_sequences")
+}
+
+/// Registo de cada emissão ou reimpressão de documento PDF.
+model OrderDocumentIssue {
+  id             String                     @id @default(uuid()) @db.Uuid
+  orderId        String                     @map("order_id") @db.Uuid
+  documentModel  InvoiceDocumentModel       @map("document_model")
+  documentNumber String                     @map("document_number")
+  sequenceYear   Int                        @map("sequence_year")
+  sequenceNum    Int                        @map("sequence_num")
+  action         OrderDocumentIssueAction
+  issuedById     String?                    @map("issued_by_id") @db.Uuid
+  createdAt      DateTime                   @default(now()) @map("created_at")
+
+  order    Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  issuedBy User? @relation("OrderDocumentIssuedBy", fields: [issuedById], references: [id], onDelete: SetNull)
+
+  @@index([orderId, createdAt])
+  @@index([documentNumber])
+  @@index([createdAt])
+  @@map("order_document_issues")
+}

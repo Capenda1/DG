@@ -1,0 +1,19 @@
+# Dependências e build
+/node_modules
+/dist
+
+# Ambiente local (nunca commitar segredos)
+.env
+.env.*
+!.env.sample
+
+# Ferramentas
+*.tsbuildinfo
+/coverage
+
+# Uploads locais (modelagem + arte)
+/uploads
+
+# Logs locais
+*.log
+backend.log
