@@ -18,6 +18,8 @@ type FingerprintLayer =
       strokeWidth?: number;
       textEffect?: string;
       curveStyle?: string;
+      curveRadius?: number;
+      curveFlip?: boolean;
       designerModel?: boolean;
     }
   | {
