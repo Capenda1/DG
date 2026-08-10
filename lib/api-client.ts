@@ -160,11 +160,19 @@ export async function apiFetch(
   if (auth && res.status === 401) {
     const refreshed = await refreshSession();
     if (refreshed) {
+      const retryHeaders = new Headers(inputHeaders);
+      if (
+        typeof rest.body === "string" &&
+        rest.body.length > 0 &&
+        !retryHeaders.has("Content-Type")
+      ) {
+        retryHeaders.set("Content-Type", "application/json");
+      }
       res = await fetchWithDeadline(
         apiUrl(path),
         {
           ...rest,
-          headers: new Headers(inputHeaders),
+          headers: retryHeaders,
           signal: userSignal,
           credentials: "include",
         },
