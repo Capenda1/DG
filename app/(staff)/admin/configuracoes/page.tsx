@@ -34,7 +34,7 @@ import {
   PanelPagamentos,
   PanelSistema,
 } from "./_components/settings-panels";
-
+import { PanelBackups } from "./_components/PanelBackups";
 const DEFAULT_BUSINESS: BusinessProfileSettings = {
   companyName: "",
   legalName: "",
@@ -101,6 +101,11 @@ const TAB_HEADINGS: Record<
     title: "Sistema",
     description:
       "Integrações internas — email SMTP para recuperação de acesso e notificações.",
+  },
+  backups: {
+    title: "Backups",
+    description:
+      "Gere e descarregue cópias da base de dados e dos ficheiros para memória externa.",
   },
 };
 
@@ -389,12 +394,14 @@ export default function AdminConfiguracoesPage() {
                   onSmtpPassChange={setSmtpPassInput}
                 />
               ) : null}
+
+              {tab === "backups" ? <PanelBackups /> : null}
             </main>
           </div>
         )}
           </div>
 
-      {!loading ? (
+      {!loading && tab !== "backups" ? (
         <SettingsSaveBar
           saving={saving}
           saved={saved}

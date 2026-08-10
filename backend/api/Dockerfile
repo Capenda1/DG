@@ -14,6 +14,8 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
+RUN apk add --no-cache postgresql-client tar gzip
+
 COPY package*.json ./
 RUN npm ci --omit=dev && npm install prisma@6.19.0 --no-save
 

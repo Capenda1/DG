@@ -289,7 +289,8 @@ export type SettingsTabId =
   | "aparencia"
   | "pagamentos"
   | "comprovantes"
-  | "sistema";
+  | "sistema"
+  | "backups";
 
 export const SETTINGS_TABS: {
   id: SettingsTabId;
@@ -320,6 +321,11 @@ export const SETTINGS_TABS: {
     id: "sistema",
     label: "Sistema",
     description: "Email e integrações",
+  },
+  {
+    id: "backups",
+    label: "Backups",
+    description: "Descarregar BD e ficheiros",
   },
 ];
 

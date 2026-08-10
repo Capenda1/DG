@@ -1708,6 +1708,49 @@ export async function adminUpdateSmtpMailSettings(
   });
 }
 
+/* ─── Backups manuais (ADMIN) ───────────────────────────────── */
+
+export type AdminBackupKind = "database" | "uploads" | "full";
+
+export type AdminBackupFileInfo = {
+  name: string;
+  kind: "database" | "uploads";
+  sizeBytes: number;
+};
+
+export async function createAdminBackup(
+  kind: AdminBackupKind,
+): Promise<{ files: AdminBackupFileInfo[] }> {
+  return apiJson<{ files: AdminBackupFileInfo[] }>("/api/admin/backups", {
+    method: "POST",
+    auth: true,
+    body: JSON.stringify({ kind }),
+  });
+}
+
+export async function downloadAdminBackup(name: string): Promise<Blob> {
+  const res = await apiFetch(
+    `/api/admin/backups/${encodeURIComponent(name)}`,
+    { auth: true },
+  );
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res));
+  }
+  return res.blob();
+}
+
+/** Dispara download no browser (para gravar em USB / disco externo). */
+export function triggerBrowserDownload(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 /* ─── Admin pedidos ─────────────────────────────────────────── */
 
 
