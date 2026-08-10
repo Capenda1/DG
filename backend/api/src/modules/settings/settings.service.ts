@@ -856,31 +856,33 @@ export class SettingsService {
   }
 
   async updateTwilioSmsSettings(
-    data: TwilioSmsSettingsUpdate,
+    data: TwilioSmsSettingsUpdate = {},
   ): Promise<TwilioSmsSettingsPublic> {
+    const patch = data ?? {};
     const current = await this.getTwilioSmsSettingsRaw();
     const authToken =
-      typeof data.authToken === 'string' && data.authToken.trim()
-        ? data.authToken.trim()
+      typeof patch.authToken === 'string' && patch.authToken.trim()
+        ? patch.authToken.trim()
         : current.authToken;
     const merged: TwilioSmsSettings = {
-      enabled: data.enabled ?? current.enabled,
+      enabled: patch.enabled ?? current.enabled,
       accountSid:
-        data.accountSid !== undefined
-          ? data.accountSid.trim()
+        patch.accountSid !== undefined
+          ? patch.accountSid.trim()
           : current.accountSid,
       authToken,
       smsFrom:
-        data.smsFrom !== undefined
-          ? data.smsFrom.trim() || DEFAULT_TWILIO_SMS.smsFrom
+        patch.smsFrom !== undefined
+          ? patch.smsFrom.trim() || DEFAULT_TWILIO_SMS.smsFrom
           : current.smsFrom,
       messageTemplate:
-        data.messageTemplate !== undefined
-          ? data.messageTemplate.trim() || DEFAULT_TWILIO_SMS.messageTemplate
+        patch.messageTemplate !== undefined
+          ? patch.messageTemplate.trim() ||
+            DEFAULT_TWILIO_SMS.messageTemplate
           : current.messageTemplate,
       oneWayFooter:
-        data.oneWayFooter !== undefined
-          ? data.oneWayFooter
+        patch.oneWayFooter !== undefined
+          ? patch.oneWayFooter
           : current.oneWayFooter,
     };
     await this.prisma.setting.upsert({
@@ -892,11 +894,14 @@ export class SettingsService {
     return {
       ...rest,
       hasAuthToken: Boolean(merged.authToken.trim()),
-      configSource: merged.enabled && merged.accountSid.trim() && merged.authToken.trim()
-        ? 'database'
-        : this.envTwilioConfigured()
-          ? 'env'
-          : 'database',
+      configSource:
+        merged.enabled &&
+        merged.accountSid.trim() &&
+        merged.authToken.trim()
+          ? 'database'
+          : this.envTwilioConfigured()
+            ? 'env'
+            : 'database',
     };
   }
 

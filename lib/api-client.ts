@@ -140,6 +140,14 @@ export async function apiFetch(
       ? undefined
       : userSignalMaybe;
   const headers = new Headers(inputHeaders);
+  // Pedidos com body JSON sem Content-Type → Express não faz parse → @Body() undefined → 500
+  if (
+    typeof rest.body === "string" &&
+    rest.body.length > 0 &&
+    !headers.has("Content-Type")
+  ) {
+    headers.set("Content-Type", "application/json");
+  }
   const fetchInit: RequestInit = {
     ...rest,
     headers,
