@@ -23,11 +23,7 @@ node deploy/smoke-go-live.mjs
 2. Docker 24+ e Docker Compose  
 3. Clonar o repositório  
 4. `cp backend/env.prod.sample backend/.env.prod` e preencher **todos** os valores  
-5. Activar MFA obrigatório para ADMIN:
-
-```env
-MFA_REQUIRE_ADMIN=true
-```
+5. MFA para ADMIN é opcional (`MFA_REQUIRE_ADMIN=false` por omissão).
 
 6. Validar:
 
@@ -82,9 +78,7 @@ curl -X POST https://app.seudominio.com/api/auth/bootstrap \
   -d '{"email":"admin@empresa.com","password":"SenhaForte123!","name":"Admin"}'
 ```
 
-Depois: login → **Configurações → Sistema → Activar MFA** → guardar recovery codes.
-
-Com `MFA_REQUIRE_ADMIN=true`, o painel admin redirecciona para `/admin/configuracoes#sistema` até o MFA estar activo.
+Depois: login com email/password. MFA TOTP é opcional em Configurações → Sistema.
 
 ---
 
@@ -94,7 +88,6 @@ Com `MFA_REQUIRE_ADMIN=true`, o painel admin redirecciona para `/admin/configura
 SMOKE_BASE=https://app.seudominio.com \
 SMOKE_EMAIL=admin@empresa.com \
 SMOKE_PASSWORD='…' \
-SMOKE_MFA_CODE=123456 \
 node deploy/smoke-go-live.mjs
 ```
 
@@ -122,10 +115,10 @@ Copiar periodicamente `/var/backups/dadiva` para armazenamento off-site.
 - [ ] `check-env-prod.sh` OK  
 - [ ] HTTPS (cadeado no browser)  
 - [ ] `/api/health/ready` via domínio  
-- [ ] Login + MFA + logout (smoke)  
+- [ ] Login + logout (smoke)  
 - [ ] Email de recuperação recebido  
 - [ ] Backups cron a correr (teste manual uma vez)  
 - [ ] Portas 4000/5432/8000 fechadas ao público  
-- [ ] Recovery codes MFA guardados offline  
+
 
 Quando todos os itens estiverem marcados: **go-live**.
