@@ -98,15 +98,18 @@ Testar também: recuperação de password (email SMTP).
 ## 6. Backups (cron)
 
 ```bash
-sudo mkdir -p /var/backups/dadiva
-sudo chmod +x /opt/dadiva/deploy/backup-*.sh
-
-# crontab -e
-15 2 * * * /opt/dadiva/deploy/backup-postgres.sh >> /var/log/dadiva-backup.log 2>&1
-0  3 * * * /opt/dadiva/deploy/backup-uploads.sh  >> /var/log/dadiva-backup.log 2>&1
+cd /opt/dadiva
+git pull origin main
+bash deploy/install-backups.sh
 ```
 
-Copiar periodicamente `/var/backups/dadiva` para armazenamento off-site.
+Isto cria `/var/backups/dadiva`, torna os scripts executáveis, agenda:
+- Postgres — todos os dias às **02:15**
+- Uploads — todos os dias às **03:00**
+
+Retenção: **14 dias**. Log: `/var/log/dadiva-backup.log`.
+
+Copiar periodicamente `/var/backups/dadiva` para armazenamento off-site (outro disco, S3, PC).
 
 ---
 
