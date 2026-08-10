@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -309,6 +310,7 @@ export class SettingsService {
 
   private readonly maxLogoBytes = 3 * 1024 * 1024;
   private readonly maxLoginBackgroundBytes = 5 * 1024 * 1024;
+  private readonly logger = new Logger(SettingsService.name);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -797,19 +799,60 @@ export class SettingsService {
   }
 
   async getTwilioSmsSettingsPublic(): Promise<TwilioSmsSettingsPublic> {
-    const raw = await this.getTwilioSmsSettingsRaw();
-    const { authToken, ...rest } = raw;
-    const envConfigured = this.envTwilioConfigured();
-    return {
-      ...rest,
-      hasAuthToken: Boolean(authToken.trim()),
-      configSource:
-        raw.enabled && raw.accountSid.trim() && authToken.trim()
+    try {
+      const raw = await this.getTwilioSmsSettingsRaw();
+      const envSid = process.env.TWILIO_ACCOUNT_SID?.trim() ?? '';
+      const envToken = process.env.TWILIO_AUTH_TOKEN?.trim() ?? '';
+      const envFrom = process.env.TWILIO_SMS_FROM?.trim() ?? '';
+      const envConfigured = Boolean(envSid && envToken && envFrom);
+      const envFlag = (
+        process.env.TWILIO_SMS_ENABLED ??
+        this.config.get<string>('twilio.enabled') ??
+        'true'
+      )
+        .trim()
+        .toLowerCase();
+      const envEnabled =
+        envFlag !== '0' && envFlag !== 'false' && envFlag !== 'off';
+
+      const hasDbCreds = Boolean(
+        raw.accountSid.trim() && raw.authToken.trim(),
+      );
+      const usingDb = raw.enabled && hasDbCreds;
+
+      return {
+        enabled: usingDb ? true : envConfigured && envEnabled,
+        accountSid: usingDb
+          ? raw.accountSid
+          : raw.accountSid.trim() || envSid,
+        smsFrom: usingDb
+          ? raw.smsFrom
+          : raw.smsFrom.trim() || envFrom || DEFAULT_TWILIO_SMS.smsFrom,
+        messageTemplate: raw.messageTemplate,
+        oneWayFooter: raw.oneWayFooter,
+        hasAuthToken: usingDb
+          ? Boolean(raw.authToken.trim())
+          : Boolean(envToken || raw.authToken.trim()),
+        configSource: usingDb
           ? 'database'
           : envConfigured
             ? 'env'
             : 'database',
-    };
+      };
+    } catch (err) {
+      this.logger.error(
+        `Falha ao ler configuração Twilio SMS: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return {
+        enabled: false,
+        accountSid: '',
+        smsFrom: DEFAULT_TWILIO_SMS.smsFrom,
+        messageTemplate: DEFAULT_TWILIO_SMS.messageTemplate,
+        oneWayFooter: DEFAULT_TWILIO_SMS.oneWayFooter,
+        hasAuthToken: false,
+        configSource: 'database',
+      };
+    }
   }
 
   async updateTwilioSmsSettings(

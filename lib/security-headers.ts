@@ -48,7 +48,8 @@ export function buildSecurityHeaders(): { key: string; value: string }[] {
     `font-src 'self' data: ${GOOGLE_FONTS_STATIC}`,
     `connect-src ${connectSrc.join(" ")}`,
     "worker-src 'self' blob:",
-    "media-src 'self' blob:",
+    // data: — tons curtos (ex. feedback UI); blob: — pré-visualizações
+    "media-src 'self' blob: data:",
     "frame-src 'self' blob:",
     "frame-ancestors 'none'",
     "base-uri 'self'",
