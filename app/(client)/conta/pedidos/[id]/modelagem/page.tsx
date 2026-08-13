@@ -84,6 +84,8 @@ import {
 import {
   type MockupViewer2DHandle,
 } from "@/components/modelagem/MockupViewer2D";
+import { ModelagemMobileEditSheet } from "@/components/modelagem/ModelagemMobileEditSheet";
+import type { LayerTransformPatch } from "@/components/modelagem/modelagem-touch-gestures";
 
 /* ── Constantes ── */
 const W = MODELAGEM_COMPOSITE_SIZE; // 512
@@ -744,9 +746,10 @@ function ImageCropModal({
 
   const MIN = 0.04;
 
-  function startDrag(handle: CropHandle, e: React.MouseEvent) {
+  function startDrag(handle: CropHandle, e: React.PointerEvent) {
     e.preventDefault();
     e.stopPropagation();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     const rect = containerRef.current!.getBoundingClientRect();
     dragRef.current = {
       handle,
@@ -757,7 +760,7 @@ function ImageCropModal({
   }
 
   useEffect(() => {
-    function onMove(e: MouseEvent) {
+    function onMove(e: PointerEvent) {
       const d = dragRef.current;
       if (!d || !containerRef.current) return;
       const rect = containerRef.current.getBoundingClientRect();
@@ -799,11 +802,13 @@ function ImageCropModal({
       });
     }
     function onUp() { dragRef.current = null; }
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
     return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
     };
   }, []);
 
@@ -851,7 +856,7 @@ function ImageCropModal({
           </div>
           <button
             onClick={onClose}
-            className="rounded-lg p-1.5 text-zinc-400 transition hover:bg-zinc-800 hover:text-white"
+            className="flex h-11 w-11 items-center justify-center rounded-lg p-1.5 text-zinc-400 transition hover:bg-zinc-800 hover:text-white"
           >
             <svg className="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M4 4l8 8M12 4l-8 8" strokeLinecap="round"/>
@@ -864,7 +869,7 @@ function ImageCropModal({
           className="flex justify-center overflow-hidden rounded-xl"
           style={{ backgroundImage: "conic-gradient(#334155 25%,#1e293b 0 50%,#334155 0 75%,#1e293b 0)", backgroundSize: "16px 16px" }}
         >
-          <div ref={containerRef} className="relative select-none">
+          <div ref={containerRef} className="relative touch-none select-none" style={{ touchAction: "none" }}>
             <img src={src} alt="" className="block max-h-[58vh] max-w-full" draggable={false} />
 
             {/* máscaras escuras fora do recorte */}
@@ -879,7 +884,7 @@ function ImageCropModal({
             <div
               className="absolute cursor-move border border-white/80 shadow-[0_0_0_1px_rgba(0,0,0,0.5)]"
               style={{ left: `${crop.x * 100}%`, top: `${crop.y * 100}%`, width: `${crop.w * 100}%`, height: `${crop.h * 100}%` }}
-              onMouseDown={(e) => startDrag("body", e)}
+              onPointerDown={(e) => startDrag("body", e)}
             >
               {/* grade de terços */}
               <div className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -889,13 +894,15 @@ function ImageCropModal({
                 <div className="absolute top-2/3 left-0 h-px w-full bg-white/20" />
               </div>
 
-              {/* cantos de arraste */}
+              {/* cantos de arraste — ≥44px para toque */}
               {corners.map(([handle, pos, cur]) => (
                 <div
                   key={handle}
-                  className={`absolute h-[18px] w-[18px] rounded-sm bg-white shadow-md ${pos} ${cur}`}
-                  onMouseDown={(e) => startDrag(handle, e)}
-                />
+                  className={`absolute flex h-11 w-11 items-center justify-center ${pos} ${cur}`}
+                  onPointerDown={(e) => startDrag(handle, e)}
+                >
+                  <span className="h-[18px] w-[18px] rounded-sm bg-white shadow-md" />
+                </div>
               ))}
             </div>
           </div>
@@ -912,7 +919,7 @@ function ImageCropModal({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-xl border border-zinc-600/50 bg-zinc-800/40 px-4 py-2 text-xs font-medium text-zinc-300 transition hover:bg-zinc-800"
+              className="min-h-11 rounded-xl border border-zinc-600/50 bg-zinc-800/40 px-4 py-2 text-xs font-medium text-zinc-300 transition hover:bg-zinc-800"
             >
               Cancelar
             </button>
@@ -920,7 +927,7 @@ function ImageCropModal({
               type="button"
               disabled={applying}
               onClick={applyCrop}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-amber-500 px-4 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-amber-400 disabled:opacity-60"
+              className="inline-flex min-h-11 items-center gap-1.5 rounded-xl bg-amber-500 px-4 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-amber-400 disabled:opacity-60"
             >
               {applying && <span className="h-3 w-3 animate-spin rounded-full border border-zinc-800/40 border-t-zinc-900" />}
               {applying ? "A processar…" : "Aplicar corte"}
@@ -1024,6 +1031,8 @@ export default function ContaPedidoModelagemPage() {
   const futureRef = useRef<AnyLayer[][]>([]);               // estados futuros (após undo)
   const [historyLen, setHistoryLen] = useState(0);
   const [futureLen, setFutureLen] = useState(0);
+  /** Altura do sheet móvel — reserva espaço para o mockup não ficar coberto. */
+  const [mobileSheetH, setMobileSheetH] = useState(0);
   const patchHistoryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const patchHistorySnapshotRef = useRef<AnyLayer[] | null>(null); // snapshot antes da primeira edição contínua
 
@@ -1352,6 +1361,7 @@ export default function ContaPedidoModelagemPage() {
     if (selectedId && deviceLayout.isPhone) {
       setSidePanelTab("edit");
     }
+    if (!selectedId) setMobileSheetH(0);
   }, [selectedId, deviceLayout.isPhone]);
 
   useEffect(() => {
@@ -1560,6 +1570,14 @@ export default function ContaPedidoModelagemPage() {
   const moveLayer = useCallback((lid: string, x: number, y: number) => {
     if (clientModelagemReadOnly) return;
     setLayers((prev) => prev.map((l) => (l.id === lid ? ({ ...l, x, y } as AnyLayer) : l)));
+  }, [clientModelagemReadOnly]);
+
+  /** Pinch / rotação no mockup — sem debounce (histórico já guardado em startLayerDrag). */
+  const transformLayer = useCallback((lid: string, patch: LayerTransformPatch) => {
+    if (clientModelagemReadOnly) return;
+    setLayers((prev) =>
+      prev.map((l) => (l.id === lid ? ({ ...l, ...patch } as AnyLayer) : l)),
+    );
   }, [clientModelagemReadOnly]);
 
   /** Chamado quando o drag começa no mockup — guarda snapshot de undo e selecciona o layer. */
@@ -2646,29 +2664,66 @@ export default function ContaPedidoModelagemPage() {
             aria-hidden
           />
 
-          <ProductMockupViewer
-            ref={mockupRef}
-            preview={modelagemPreview}
-            artCanvasRef={artOnlyCanvasRef}
-            drawVersion={drawVersion}
-            showFooterHint={!deviceLayout.isPhone}
-            layers={mockupDraggableLayers}
-            onDragStart={startLayerDrag}
-            onMoveLayer={moveLayer}
-            onSelectLayer={setSelectedId}
-            selectedId={selectedId}
-            selectedLayerLabel={selectedLayerLabel}
-            activeSide={activeSide}
-            onSideChange={setActiveSide}
+          <div
             className="h-full w-full"
-          />
+            style={
+              deviceLayout.isPhone && mobileSheetH > 0
+                ? { paddingBottom: mobileSheetH }
+                : undefined
+            }
+          >
+            <ProductMockupViewer
+              ref={mockupRef}
+              preview={modelagemPreview}
+              artCanvasRef={artOnlyCanvasRef}
+              drawVersion={drawVersion}
+              showFooterHint={!deviceLayout.isPhone}
+              layers={mockupDraggableLayers}
+              onDragStart={startLayerDrag}
+              onMoveLayer={moveLayer}
+              onTransformLayer={transformLayer}
+              onSelectLayer={setSelectedId}
+              selectedId={selectedId}
+              selectedLayerLabel={selectedLayerLabel}
+              activeSide={activeSide}
+              onSideChange={setActiveSide}
+              touchFriendly={deviceLayout.isPhone}
+              className="h-full w-full"
+            />
 
-          {activeLayers.length === 0 ? (
-            <ModelagemEmptyState
+            {activeLayers.length === 0 ? (
+              <ModelagemEmptyState
+                readOnly={clientModelagemReadOnly}
+                onAddText={addText}
+                onOpenTemplates={() => setShowTemplateModal(true)}
+                onUploadClick={() => fileInputRef.current?.click()}
+              />
+            ) : null}
+          </div>
+
+          {deviceLayout.isPhone && selected ? (
+            <ModelagemMobileEditSheet
+              layer={{
+                id: selected.id,
+                kind: selected.kind,
+                scale: selected.scale,
+                rotationDeg: selected.rotationDeg,
+                widthRel: selected.kind === "image" ? (selected as ImageLayerEx).widthRel : undefined,
+                fontSize: selected.kind === "text" ? (selected as TextLayerEx).fontSize : undefined,
+                locked: clientModelagemReadOnly || Boolean(selected.designerModel),
+                name: selected.kind === "image" ? (selected as ImageLayerEx).name : undefined,
+                text: selected.kind === "text" ? (selected as TextLayerEx).text : undefined,
+              }}
               readOnly={clientModelagemReadOnly}
-              onAddText={addText}
-              onOpenTemplates={() => setShowTemplateModal(true)}
-              onUploadClick={() => fileInputRef.current?.click()}
+              canUndo={historyLen > 0}
+              onPatch={(patch) => patchLayer(selected.id, patch as Partial<AnyLayer>)}
+              onRemove={() => removeLayer(selected.id)}
+              onUndo={undo}
+              onClose={() => {
+                setSelectedId(null);
+                setMobileSheetH(0);
+              }}
+              onOccupiedHeightChange={setMobileSheetH}
             />
           ) : null}
 

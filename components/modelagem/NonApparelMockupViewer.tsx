@@ -32,6 +32,19 @@ import type {
   DraggableLayer,
   MockupViewer2DHandle,
 } from "@/components/modelagem/MockupViewer2D";
+import {
+  angleDeg,
+  clamp01,
+  clampScale,
+  DESKTOP_HIT_MIN_PX,
+  dist,
+  midpoint,
+  normalizeRotation,
+  TOUCH_HIT_MIN_PX,
+  type ActiveGesture,
+  type LayerTransformPatch,
+  type Point,
+} from "@/components/modelagem/modelagem-touch-gestures";
 
 export type NonApparelMockupViewerProps = {
   kind: Extract<ModelagemPreviewKind, "MUG" | "FLAT">;
@@ -45,24 +58,18 @@ export type NonApparelMockupViewerProps = {
   layers?: DraggableLayer[];
   onDragStart?: (id: string) => void;
   onMoveLayer?: (id: string, x: number, y: number) => void;
+  onTransformLayer?: (id: string, patch: LayerTransformPatch) => void;
   onSelectLayer?: (id: string) => void;
   selectedId?: string | null;
   selectedLayerLabel?: string;
   activeSide?: "front" | "back";
   onSideChange?: (side: "front" | "back") => void;
+  touchFriendly?: boolean;
 };
 
 type CanvasSize = { w: number; h: number };
-type DragState = {
-  id: string;
-  startX: number;
-  startY: number;
-  origX: number;
-  origY: number;
-  moved: boolean;
-};
 
-function layerBounds(layer: DraggableLayer, W: number, H: number) {
+function layerBounds(layer: DraggableLayer, W: number, H: number, hitMinPx: number) {
   const { artSize, artX, artY, artScale } = artLayout(W, H);
   const cx = artX + layer.x * artSize;
   const cy = artY + layer.y * artSize;
@@ -79,7 +86,8 @@ function layerBounds(layer: DraggableLayer, W: number, H: number) {
     hw = dw / 2 + 10;
     hh = dw / (layer.aspect ?? 1) / 2 + 10;
   }
-  return { cx, cy, hw: Math.max(hw, 22), hh: Math.max(hh, 22) };
+  const halfMin = hitMinPx / 2;
+  return { cx, cy, hw: Math.max(hw, halfMin), hh: Math.max(hh, halfMin) };
 }
 
 function hitTest(
@@ -88,10 +96,11 @@ function hitTest(
   layers: DraggableLayer[],
   W: number,
   H: number,
+  hitMinPx: number,
 ): string | null {
   const sorted = [...layers].sort((a, b) => b.zIndex - a.zIndex);
   for (const layer of sorted) {
-    const { cx: lx, cy: ly, hw, hh } = layerBounds(layer, W, H);
+    const { cx: lx, cy: ly, hw, hh } = layerBounds(layer, W, H, hitMinPx);
     const angle = -(layer.rotationDeg * Math.PI) / 180;
     const dx = cx - lx;
     const dy = cy - ly;
@@ -102,7 +111,7 @@ function hitTest(
   return null;
 }
 
-function toCanvasCoords(e: PointerEvent<HTMLCanvasElement>) {
+function toCanvasCoords(e: PointerEvent<HTMLCanvasElement>): Point {
   const rect = e.currentTarget.getBoundingClientRect();
   const cw = e.currentTarget.width;
   const ch = e.currentTarget.height;
@@ -154,11 +163,13 @@ export const NonApparelMockupViewer = forwardRef<
     layers,
     onDragStart,
     onMoveLayer,
+    onTransformLayer,
     onSelectLayer,
     selectedId,
     selectedLayerLabel,
     activeSide = "front",
     onSideChange,
+    touchFriendly = false,
   },
   ref,
 ) {
@@ -171,8 +182,12 @@ export const NonApparelMockupViewer = forwardRef<
   const tintedMugRef = useRef<HTMLCanvasElement | null>(null);
   const side = activeSide;
 
-  const dragRef = useRef<DragState | null>(null);
+  const gestureRef = useRef<ActiveGesture | null>(null);
+  const pointersRef = useRef(new Map<number, Point>());
   const layersRef = useRef<DraggableLayer[]>([]);
+  const hitMinPx = touchFriendly ? TOUCH_HIT_MIN_PX : DESKTOP_HIT_MIN_PX;
+  const hitMinRef = useRef(hitMinPx);
+  hitMinRef.current = hitMinPx;
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
@@ -280,7 +295,7 @@ export const NonApparelMockupViewer = forwardRef<
     c2d.clearRect(0, 0, W, H);
 
     function drawHandle(layer: DraggableLayer, isSelected: boolean, dragging: boolean) {
-      const { cx, cy, hw, hh } = layerBounds(layer, W, H);
+      const { cx, cy, hw, hh } = layerBounds(layer, W, H, hitMinPx);
       const angle = (layer.rotationDeg * Math.PI) / 180;
       c2d.save();
       c2d.translate(cx, cy);
@@ -307,15 +322,67 @@ export const NonApparelMockupViewer = forwardRef<
       if (sel) drawHandle(sel, true, isDragging && hoveredId === selectedId);
       if (hov) drawHandle(hov, false, false);
     }
-  }, [hoveredId, isDragging, layers, canvasSize, selectedId, kind]);
+  }, [hoveredId, isDragging, layers, canvasSize, selectedId, kind, hitMinPx]);
+
+  const beginPinch = useCallback(
+    (layerId: string, a: Point, b: Point, ids: [number, number]) => {
+      const layer = layersRef.current.find((l) => l.id === layerId);
+      if (!layer || layer.locked) return;
+      const mid = midpoint(a, b);
+      gestureRef.current = {
+        mode: "pinch",
+        id: layerId,
+        pointerIds: ids,
+        startDist: Math.max(1, dist(a, b)),
+        startAngle: angleDeg(a, b),
+        startMidX: mid.x,
+        startMidY: mid.y,
+        origX: layer.x,
+        origY: layer.y,
+        origScale: layer.scale,
+        origRot: layer.rotationDeg,
+        moved: false,
+      };
+      setHoveredId(layerId);
+      setIsDragging(true);
+      onDragStart?.(layerId);
+    },
+    [onDragStart],
+  );
 
   const handlePointerDown = useCallback(
     (e: PointerEvent<HTMLCanvasElement>) => {
       if (kind !== "MUG" && kind !== "FLAT") return;
+      if (e.pointerType === "touch") e.preventDefault();
       const pos = toCanvasCoords(e);
+      const W = e.currentTarget.width;
+      const H = e.currentTarget.height;
+      pointersRef.current.set(e.pointerId, pos);
+      e.currentTarget.setPointerCapture(e.pointerId);
+
       const arr = layersRef.current;
       if (!arr.length) return;
-      const id = hitTest(pos.x, pos.y, arr, e.currentTarget.width, e.currentTarget.height);
+
+      const pts = [...pointersRef.current.entries()];
+      if (pts.length >= 2) {
+        const [idA, pA] = pts[0]!;
+        const [idB, pB] = pts[1]!;
+        const g = gestureRef.current;
+        const targetId =
+          g?.id ??
+          selectedId ??
+          hitTest(midpoint(pA, pB).x, midpoint(pA, pB).y, arr, W, H, hitMinRef.current) ??
+          hitTest(pos.x, pos.y, arr, W, H, hitMinRef.current);
+        if (targetId) {
+          const layer = arr.find((l) => l.id === targetId);
+          if (layer && !layer.locked) {
+            beginPinch(targetId, pA, pB, [idA, idB]);
+            return;
+          }
+        }
+      }
+
+      const id = hitTest(pos.x, pos.y, arr, W, H, hitMinRef.current);
       if (!id) {
         setHoveredId(null);
         return;
@@ -326,9 +393,10 @@ export const NonApparelMockupViewer = forwardRef<
         setHoveredId(id);
         return;
       }
-      e.currentTarget.setPointerCapture(e.pointerId);
-      dragRef.current = {
+      gestureRef.current = {
+        mode: "drag",
         id,
+        pointerId: e.pointerId,
         startX: pos.x,
         startY: pos.y,
         origX: layer.x,
@@ -339,48 +407,142 @@ export const NonApparelMockupViewer = forwardRef<
       setIsDragging(true);
       onDragStart?.(id);
     },
-    [kind, onDragStart, onSelectLayer],
+    [beginPinch, kind, onDragStart, onSelectLayer, selectedId],
   );
 
   const handlePointerMove = useCallback(
     (e: PointerEvent<HTMLCanvasElement>) => {
       if (kind !== "MUG" && kind !== "FLAT") return;
+      if (e.pointerType === "touch") e.preventDefault();
       const pos = toCanvasCoords(e);
       const W = e.currentTarget.width;
       const H = e.currentTarget.height;
-      const drag = dragRef.current;
-      if (drag) {
-        const { artSize } = artLayout(W, H);
-        const dx = (pos.x - drag.startX) / artSize;
-        const dy = (pos.y - drag.startY) / artSize;
-        if (!drag.moved && (Math.abs(dx) > 0.002 || Math.abs(dy) > 0.002)) {
-          drag.moved = true;
-        }
-        onMoveLayer?.(
-          drag.id,
-          Math.max(0.01, Math.min(0.99, drag.origX + dx)),
-          Math.max(0.01, Math.min(0.99, drag.origY + dy)),
-        );
-      } else {
-        const arr = layersRef.current;
-        setHoveredId(arr.length ? hitTest(pos.x, pos.y, arr, W, H) : null);
+      if (pointersRef.current.has(e.pointerId)) {
+        pointersRef.current.set(e.pointerId, pos);
       }
+      const g = gestureRef.current;
+      if (!g) {
+        const arr = layersRef.current;
+        setHoveredId(arr.length ? hitTest(pos.x, pos.y, arr, W, H, hitMinRef.current) : null);
+        return;
+      }
+
+      const { artSize } = artLayout(W, H);
+
+      if (g.mode === "drag") {
+        if (e.pointerId !== g.pointerId) return;
+        const dx = (pos.x - g.startX) / artSize;
+        const dy = (pos.y - g.startY) / artSize;
+        if (!g.moved && (Math.abs(dx) > 0.002 || Math.abs(dy) > 0.002)) g.moved = true;
+        onMoveLayer?.(g.id, clamp01(g.origX + dx), clamp01(g.origY + dy));
+        return;
+      }
+
+      const pA = pointersRef.current.get(g.pointerIds[0]);
+      const pB = pointersRef.current.get(g.pointerIds[1]);
+      if (!pA || !pB) return;
+      const d = Math.max(1, dist(pA, pB));
+      const scaleFactor = d / g.startDist;
+      const rotDelta = angleDeg(pA, pB) - g.startAngle;
+      const mid = midpoint(pA, pB);
+      const mx = (mid.x - g.startMidX) / artSize;
+      const my = (mid.y - g.startMidY) / artSize;
+      if (
+        !g.moved &&
+        (Math.abs(scaleFactor - 1) > 0.02 ||
+          Math.abs(rotDelta) > 2 ||
+          Math.abs(mx) > 0.002 ||
+          Math.abs(my) > 0.002)
+      ) {
+        g.moved = true;
+      }
+      onTransformLayer?.(g.id, {
+        x: clamp01(g.origX + mx),
+        y: clamp01(g.origY + my),
+        scale: clampScale(g.origScale * scaleFactor),
+        rotationDeg: normalizeRotation(g.origRot + rotDelta),
+      });
     },
-    [kind, onMoveLayer],
+    [kind, onMoveLayer, onTransformLayer],
   );
 
   const handlePointerUp = useCallback(
     (e: PointerEvent<HTMLCanvasElement>) => {
-      const drag = dragRef.current;
-      dragRef.current = null;
-      setIsDragging(false);
-      if (kind !== "MUG" && kind !== "FLAT") return;
-      const pos = toCanvasCoords(e);
-      const W = e.currentTarget.width;
-      const H = e.currentTarget.height;
-      const arr = layersRef.current;
-      setHoveredId(arr.length ? hitTest(pos.x, pos.y, arr, W, H) : null);
-      if (drag && !drag.moved) onSelectLayer?.(drag.id);
+      pointersRef.current.delete(e.pointerId);
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        /* already released */
+      }
+
+      const g = gestureRef.current;
+      const remaining = [...pointersRef.current.entries()];
+
+      if (g?.mode === "pinch") {
+        if (remaining.length >= 2) {
+          const [idA, pA] = remaining[0]!;
+          const [idB, pB] = remaining[1]!;
+          const layer = layersRef.current.find((l) => l.id === g.id);
+          if (layer) {
+            const mid = midpoint(pA, pB);
+            gestureRef.current = {
+              mode: "pinch",
+              id: g.id,
+              pointerIds: [idA, idB],
+              startDist: Math.max(1, dist(pA, pB)),
+              startAngle: angleDeg(pA, pB),
+              startMidX: mid.x,
+              startMidY: mid.y,
+              origX: layer.x,
+              origY: layer.y,
+              origScale: layer.scale,
+              origRot: layer.rotationDeg,
+              moved: true,
+            };
+            return;
+          }
+        }
+        if (remaining.length === 1) {
+          const [pid, p] = remaining[0]!;
+          const layer = layersRef.current.find((l) => l.id === g.id);
+          if (layer) {
+            gestureRef.current = {
+              mode: "drag",
+              id: g.id,
+              pointerId: pid,
+              startX: p.x,
+              startY: p.y,
+              origX: layer.x,
+              origY: layer.y,
+              moved: true,
+            };
+            return;
+          }
+        }
+        gestureRef.current = null;
+        setIsDragging(false);
+        return;
+      }
+
+      if (g?.mode === "drag" && e.pointerId === g.pointerId) {
+        const moved = g.moved;
+        const id = g.id;
+        gestureRef.current = null;
+        setIsDragging(false);
+        if (kind !== "MUG" && kind !== "FLAT") return;
+        const pos = toCanvasCoords(e);
+        const W = e.currentTarget.width;
+        const H = e.currentTarget.height;
+        const arr = layersRef.current;
+        setHoveredId(arr.length ? hitTest(pos.x, pos.y, arr, W, H, hitMinRef.current) : null);
+        if (!moved) onSelectLayer?.(id);
+        return;
+      }
+
+      if (!remaining.length) {
+        gestureRef.current = null;
+        setIsDragging(false);
+      }
     },
     [kind, onSelectLayer],
   );
@@ -411,12 +573,14 @@ export const NonApparelMockupViewer = forwardRef<
           ref={hlRef}
           width={canvasSize.w}
           height={canvasSize.h}
-          className={`absolute inset-0 h-full w-full ${cursorClass}`}
+          className={`absolute inset-0 h-full w-full touch-none ${cursorClass}`}
+          style={{ touchAction: "none" }}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
           onPointerLeave={() => {
-            if (!dragRef.current) setHoveredId(null);
+            if (!gestureRef.current && pointersRef.current.size === 0) setHoveredId(null);
           }}
         />
       ) : null}
@@ -467,9 +631,11 @@ export const NonApparelMockupViewer = forwardRef<
 
       {showFooterHint ? (
         <p className="pointer-events-none absolute bottom-3 left-0 right-0 z-10 text-center text-[10px] text-zinc-500/90">
-          {kind === "MUG"
-            ? "Arrasta texto e imagens para posicionar na área de sublimação."
-            : "Posiciona a arte na face activa (frente ou verso)."}
+          {touchFriendly
+            ? "1 dedo: mover · 2 dedos: escala e rotação"
+            : kind === "MUG"
+              ? "Arrasta texto e imagens para posicionar na área de sublimação."
+              : "Posiciona a arte na face activa (frente ou verso)."}
         </p>
       ) : null}
     </div>
