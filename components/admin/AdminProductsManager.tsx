@@ -211,6 +211,8 @@ type CatalogLoadOverrides = {
   status?: "" | "ACTIVE" | "INACTIVE" | "ARCHIVED";
   catalogLine?: "" | "APPAREL" | "GENERIC";
   catalogFamily?: "" | CatalogFamily;
+  /** Actualiza dados sem desmontar a UI (mantém scroll e estado da matriz). */
+  silent?: boolean;
 };
 
 const selectClass =
@@ -221,6 +223,8 @@ const selectChevronStyle = {
 } as const;
 
 type WorkspaceTab = "matrix" | "prices" | "tools";
+
+const MATRIX_SAVE_CONCURRENCY = 5;
 
 /** Actualiza ?p= na barra de endereço sem navegação Next (evita loop de GET). */
 function syncProductUrlParam(productId: string | null): void {
@@ -334,7 +338,8 @@ export function AdminProductsManager() {
 
   const load = useCallback(async (opts?: CatalogLoadOverrides) => {
     setErr(null);
-    setLoading(true);
+    const silent = opts?.silent === true;
+    if (!silent) setLoading(true);
     try {
       const q =
         opts?.search !== undefined ? opts.search : debouncedQuery;
@@ -373,9 +378,14 @@ export function AdminProductsManager() {
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Erro ao carregar.");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [debouncedQuery, page, filterStatus, filterCatalogLine, filterCatalogFamily]);
+
+  const refreshCatalogSilent = useCallback(
+    () => load({ silent: true }),
+    [load],
+  );
 
   useEffect(() => {
     void load();
@@ -815,7 +825,7 @@ export function AdminProductsManager() {
                     variantId,
                   })
                 }
-                onSaved={load}
+                onSaved={refreshCatalogSilent}
                 onBulkComplete={async (opts) => {
                   setSaving(true);
                   setErr(null);
@@ -1572,12 +1582,14 @@ function VariantSuperMatrixPanel({
   saving,
   onSaved,
   setErr,
+  notifySuccess,
 }: {
   product: AdminProduct;
   catalogTemplates: ProductCatalogTemplate[];
   saving: boolean;
   onSaved: () => Promise<void>;
   setErr: (msg: string | null) => void;
+  notifySuccess: (message: string) => void;
 }) {
   const garmentType = useMemo(
     () => resolveGarmentType(product, catalogTemplates),
@@ -1631,7 +1643,29 @@ function VariantSuperMatrixPanel({
     [product.colorPrices],
   );
 
-  const [busyKey, setBusyKey] = useState<string | null>(null);
+  type MatrixDraftEntry = {
+    colorId: ApparelColorId;
+    rowProcess: ProductionProcess;
+    col: MatrixColumnSpec;
+    active: boolean;
+  };
+
+  const [draftByKey, setDraftByKey] = useState<Record<string, MatrixDraftEntry>>(
+    {},
+  );
+  const [matrixSaving, setMatrixSaving] = useState(false);
+
+  useEffect(() => {
+    setDraftByKey({});
+  }, [product.id]);
+
+  function matrixCellKey(
+    colorId: ApparelColorId,
+    col: MatrixColumnSpec,
+    rowProcess: ProductionProcess,
+  ) {
+    return `${colorId}|${rowProcess}|${col.ageBand}|${col.size}|${col.brandId}`;
+  }
 
   function findMatrixVariantForProcess(
     colorId: ApparelColorId,
@@ -1678,122 +1712,199 @@ function VariantSuperMatrixPanel({
     });
   }
 
-  async function setMatrixCellActive(
+  function cellDesiredActive(
+    colorId: ApparelColorId,
+    col: MatrixColumnSpec,
+    rowProcess: ProductionProcess,
+  ) {
+    const key = matrixCellKey(colorId, col, rowProcess);
+    if (Object.prototype.hasOwnProperty.call(draftByKey, key)) {
+      return draftByKey[key]!.active;
+    }
+    return !!findMatrixVariantForProcess(colorId, col, rowProcess)?.active;
+  }
+
+  function setMatrixCellDraft(
     colorId: ApparelColorId,
     col: MatrixColumnSpec,
     rowProcess: ProductionProcess,
     active: boolean,
   ) {
-    const key = `${colorId}-${rowProcess}-${col.ageBand}-${col.size}`;
-    setBusyKey(key);
     setErr(null);
-    try {
-      const existing = findMatrixVariantForProcess(colorId, col, rowProcess);
-      if (existing) {
-        await updateAdminProductVariant(product.id, existing.id, { active });
-      } else if (active) {
-        const n = resolveColorUnitPrice(
+    if (active) {
+      const price = resolveColorUnitPrice(
+        colorPriceTable,
+        garmentType,
+        colorId,
+        col.ageBand,
+        col.brandId,
+        rowProcess,
+      );
+      if (
+        price === null &&
+        !findMatrixVariantForProcess(colorId, col, rowProcess)
+      ) {
+        setErr(
+          `Define o preço ${
+            col.ageBand === "CHILD" ? "infantil" : "adulto"
+          } (${rowProcess === "DTF" ? "DTF" : "Sublimação"}) para «${colorId}» nesta grade (${col.brandId}) no separador Preços.`,
+        );
+        return;
+      }
+    }
+
+    const key = matrixCellKey(colorId, col, rowProcess);
+    const baseline =
+      !!findMatrixVariantForProcess(colorId, col, rowProcess)?.active;
+
+    setDraftByKey((prev) => {
+      const next = { ...prev };
+      if (active === baseline) {
+        delete next[key];
+      } else {
+        next[key] = { colorId, rowProcess, col, active };
+      }
+      return next;
+    });
+  }
+
+  function activateMatrixColorRowDraft(colorId: ApparelColorId) {
+    setErr(null);
+    const processes = allowedProcessesForColor(colorId);
+    for (const productionProcess of processes) {
+      for (const col of columnSpecs) {
+        const price = resolveColorUnitPrice(
           colorPriceTable,
           garmentType,
           colorId,
           col.ageBand,
           col.brandId,
-          rowProcess,
+          productionProcess,
         );
-        if (n === null) {
+        const existing = findMatrixVariantForProcess(
+          colorId,
+          col,
+          productionProcess,
+        );
+        if (!existing && price === null) {
           setErr(
-            `Define o preço ${
+            `Falta preço ${
               col.ageBand === "CHILD" ? "infantil" : "adulto"
-            } (${rowProcess === "DTF" ? "DTF" : "Sublimação"}) para «${colorId}» nesta grade (${col.brandId}) no separador Preços.`,
+            } (${productionProcess === "DTF" ? "DTF" : "Sublimação"}) para «${colorId}» · ${col.brandId} (separador Preços).`,
           );
           return;
         }
-        const row: ApparelCatalogVariantRow = {
-          colorId,
-          size: col.size,
-          ageBand: col.ageBand,
-          brandId: col.brandId,
-          productionProcess: rowProcess,
-        };
-        const sku = buildAdminVariantSku(product.code, row);
-        await createAdminProductVariant(product.id, {
-          sku,
-          size: col.size,
-          baseColor: colorId,
-          productionProcess: row.productionProcess,
-          garmentType,
-          unitPrice: n,
-          currency: "AOA",
-          active: true,
-          metadata: { brandId: col.brandId, ageBand: col.ageBand },
-        });
       }
-      await onSaved();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "Operação falhou.");
-    } finally {
-      setBusyKey(null);
     }
-  }
 
-  async function activateMatrixColorRow(colorId: ApparelColorId) {
-    setBusyKey(`row-${colorId}`);
-    setErr(null);
-    try {
-      const processes = allowedProcessesForColor(colorId);
+    setDraftByKey((prev) => {
+      const next = { ...prev };
       for (const productionProcess of processes) {
         for (const col of columnSpecs) {
-          const n = resolveColorUnitPrice(
-            colorPriceTable,
-            garmentType,
+          const existing = findMatrixVariantForProcess(
             colorId,
-            col.ageBand,
-            col.brandId,
+            col,
             productionProcess,
           );
-          if (n === null) {
-            setErr(
-              `Falta preço ${
-                col.ageBand === "CHILD" ? "infantil" : "adulto"
-              } (${productionProcess === "DTF" ? "DTF" : "Sublimação"}) para «${colorId}» · ${col.brandId} (separador Preços).`,
-            );
-            return;
-          }
-          const v = findMatrixVariantForProcess(colorId, col, productionProcess);
-          if (v) {
-            if (!v.active) {
-              await updateAdminProductVariant(product.id, v.id, {
-                active: true,
-              });
-            }
+          const key = matrixCellKey(colorId, col, productionProcess);
+          const baseline = !!existing?.active;
+          if (baseline) {
+            delete next[key];
           } else {
-            const row: ApparelCatalogVariantRow = {
+            next[key] = {
               colorId,
-              size: col.size,
-              ageBand: col.ageBand,
-              brandId: col.brandId,
-              productionProcess,
-            };
-            const sku = buildAdminVariantSku(product.code, row);
-            await createAdminProductVariant(product.id, {
-              sku,
-              size: col.size,
-              baseColor: colorId,
-              productionProcess,
-              garmentType,
-              unitPrice: n,
-              currency: "AOA",
+              rowProcess: productionProcess,
+              col,
               active: true,
-              metadata: { brandId: col.brandId, ageBand: col.ageBand },
-            });
+            };
           }
         }
       }
+      return next;
+    });
+  }
+
+  const draftCount = Object.keys(draftByKey).length;
+
+  async function applyMatrixDraftEntry(entry: MatrixDraftEntry) {
+    const existing = findMatrixVariantForProcess(
+      entry.colorId,
+      entry.col,
+      entry.rowProcess,
+    );
+    if (existing) {
+      if (existing.active !== entry.active) {
+        await updateAdminProductVariant(product.id, existing.id, {
+          active: entry.active,
+        });
+      }
+      return;
+    }
+    if (!entry.active) return;
+    const n = resolveColorUnitPrice(
+      colorPriceTable,
+      garmentType,
+      entry.colorId,
+      entry.col.ageBand,
+      entry.col.brandId,
+      entry.rowProcess,
+    );
+    if (n === null) {
+      throw new Error(
+        `Define o preço ${
+          entry.col.ageBand === "CHILD" ? "infantil" : "adulto"
+        } (${entry.rowProcess === "DTF" ? "DTF" : "Sublimação"}) para «${entry.colorId}» nesta grade (${entry.col.brandId}) no separador Preços.`,
+      );
+    }
+    const row: ApparelCatalogVariantRow = {
+      colorId: entry.colorId,
+      size: entry.col.size,
+      ageBand: entry.col.ageBand,
+      brandId: entry.col.brandId,
+      productionProcess: entry.rowProcess,
+    };
+    await createAdminProductVariant(product.id, {
+      sku: buildAdminVariantSku(product.code, row),
+      size: entry.col.size,
+      baseColor: entry.colorId,
+      productionProcess: row.productionProcess,
+      garmentType,
+      unitPrice: n,
+      currency: "AOA",
+      active: true,
+      metadata: { brandId: entry.col.brandId, ageBand: entry.col.ageBand },
+    });
+  }
+
+  async function saveMatrixDraft() {
+    const entries = Object.values(draftByKey);
+    if (entries.length === 0) return;
+    setMatrixSaving(true);
+    setErr(null);
+    try {
+      // Fila com concorrência limitada: evita dezenas de pedidos simultâneos.
+      let cursor = 0;
+      const workers = Array.from(
+        { length: Math.min(MATRIX_SAVE_CONCURRENCY, entries.length) },
+        async () => {
+          while (cursor < entries.length) {
+            const entry = entries[cursor++]!;
+            await applyMatrixDraftEntry(entry);
+          }
+        },
+      );
+      await Promise.all(workers);
       await onSaved();
+      setDraftByKey({});
+      notifySuccess(
+        entries.length === 1
+          ? "1 alteração da matriz guardada."
+          : `${entries.length} alterações da matriz guardadas.`,
+      );
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Operação falhou.");
     } finally {
-      setBusyKey(null);
+      setMatrixSaving(false);
     }
   }
 
@@ -1812,8 +1923,10 @@ function VariantSuperMatrixPanel({
         <p className="mt-2 text-[11px] text-zinc-500">
           Cada linha de cor pode ter <strong className="text-zinc-400">duas</strong>{" "}
           linhas na tabela quando a cor permite sublimação e DTF — activa cada
-          processo em separado. Cores só DTF têm uma linha. O preço vem do
-          separador <strong className="text-zinc-400">Preços</strong> para a
+          processo em separado. Cores só DTF têm uma linha. Marca ou desmarca
+          unidades à vontade; as alterações ficam locais até{" "}
+          <strong className="text-zinc-400">Guardar matriz</strong>. O preço vem
+          do separador <strong className="text-zinc-400">Preços</strong> para a
           combinação cor × processo × grade.
         </p>
       </div>
@@ -1934,7 +2047,6 @@ function VariantSuperMatrixPanel({
           </thead>
           <tbody>
             {APPAREL_COLORS.flatMap((color) => {
-              const rowBusy = busyKey === `row-${color.id}`;
               const processes = allowedProcessesForColor(color.id);
               return processes.map((rowProcess, procIdx) => (
                 <tr
@@ -1976,8 +2088,16 @@ function VariantSuperMatrixPanel({
                       col,
                       rowProcess,
                     );
-                    const key = `${color.id}-${rowProcess}-${col.ageBand}-${col.size}`;
-                    const busy = busyKey === key;
+                    const key = matrixCellKey(color.id, col, rowProcess);
+                    const desiredActive = cellDesiredActive(
+                      color.id,
+                      col,
+                      rowProcess,
+                    );
+                    const dirty = Object.prototype.hasOwnProperty.call(
+                      draftByKey,
+                      key,
+                    );
                     const cellPrice = resolveColorUnitPrice(
                       colorPriceTable,
                       garmentType,
@@ -1992,7 +2112,7 @@ function VariantSuperMatrixPanel({
                         key={key}
                         className={`border border-white/10 p-1 text-center align-middle ${
                           col.ageBand === "CHILD" ? "bg-teal-950/10" : ""
-                        }`}
+                        } ${dirty ? "bg-amber-500/10" : ""}`}
                       >
                         <div className="flex flex-col items-center gap-0.5 py-0.5">
                           {cellPrice !== null ? (
@@ -2010,15 +2130,14 @@ function VariantSuperMatrixPanel({
                           <input
                             type="checkbox"
                             className="h-4 w-4 rounded border-zinc-600 text-emerald-500 focus:ring-emerald-400/30"
-                            checked={!!v?.active}
+                            checked={desiredActive}
                             disabled={
                               saving ||
-                              busy ||
-                              rowBusy ||
-                              (!v && !canCreate)
+                              matrixSaving ||
+                              (!v && !canCreate && !desiredActive)
                             }
                             onChange={(e) =>
-                              void setMatrixCellActive(
+                              setMatrixCellDraft(
                                 color.id,
                                 col,
                                 rowProcess,
@@ -2026,17 +2145,19 @@ function VariantSuperMatrixPanel({
                               )
                             }
                             title={
-                              v
-                                ? v.active
-                                  ? "Visível no site — desmarca para ocultar"
-                                  : "Inactiva — marca para publicar"
-                                : canCreate
-                                  ? "Criar SKU e activar"
-                                  : `Preço ${
-                                      col.ageBand === "CHILD"
-                                        ? "infantil"
-                                        : "adulto"
-                                    } (${rowProcess === "DTF" ? "DTF" : "Sub."}) em Preços`
+                              dirty
+                                ? "Alteração por guardar"
+                                : v
+                                  ? desiredActive
+                                    ? "Visível no site — desmarca para ocultar"
+                                    : "Inactiva — marca para publicar"
+                                  : canCreate
+                                    ? "Criar SKU e activar"
+                                    : `Preço ${
+                                        col.ageBand === "CHILD"
+                                          ? "infantil"
+                                          : "adulto"
+                                      } (${rowProcess === "DTF" ? "DTF" : "Sub."}) em Preços`
                             }
                             aria-label={`${color.label} ${rowProcess === "DTF" ? "DTF" : "Sublimação"} ${col.size} ${col.ageBand === "CHILD" ? "infantil" : "adulto"}`}
                           />
@@ -2051,8 +2172,8 @@ function VariantSuperMatrixPanel({
                     >
                       <button
                         type="button"
-                        disabled={saving || !!busyKey}
-                        onClick={() => void activateMatrixColorRow(color.id)}
+                        disabled={saving || matrixSaving}
+                        onClick={() => activateMatrixColorRowDraft(color.id)}
                         className="whitespace-nowrap rounded-lg border border-emerald-500/45 bg-emerald-500/12 px-2 py-1 text-[10px] font-bold text-emerald-100 hover:bg-emerald-500/22 disabled:opacity-40"
                       >
                         Activar tudo
@@ -2065,6 +2186,37 @@ function VariantSuperMatrixPanel({
           </tbody>
         </table>
       </div>
+
+      {draftCount > 0 ? (
+        <div className="sticky bottom-2 z-30 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-400/35 bg-zinc-950/95 px-4 py-3 shadow-xl shadow-black/40 backdrop-blur-md">
+          <p className="text-xs text-amber-100/90">
+            <strong className="font-bold">{draftCount}</strong>{" "}
+            {draftCount === 1 ? "alteração" : "alterações"} por guardar — a
+            página não recarrega ao marcar células.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={matrixSaving}
+              onClick={() => {
+                setDraftByKey({});
+                setErr(null);
+              }}
+              className="rounded-xl border border-white/15 bg-white/[0.04] px-3 py-2 text-xs font-semibold text-zinc-300 hover:bg-white/[0.08] disabled:opacity-40"
+            >
+              Descartar
+            </button>
+            <button
+              type="button"
+              disabled={saving || matrixSaving}
+              onClick={() => void saveMatrixDraft()}
+              className="rounded-xl bg-gradient-to-r from-amber-400 to-amber-500 px-4 py-2 text-xs font-bold text-zinc-950 shadow-lg shadow-amber-500/20 disabled:opacity-40"
+            >
+              {matrixSaving ? "A guardar…" : "Guardar matriz"}
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -2756,6 +2908,7 @@ function ProductWorkspace({
             saving={saving}
             onSaved={onSaved}
             setErr={setErr}
+            notifySuccess={notifySuccess}
           />
         ) : null}
 
