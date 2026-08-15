@@ -7,6 +7,7 @@ import {
   getUnreadCounts,
   type OrderListItem,
 } from "@/lib/api-client";
+import { FLOATING_ABOVE_BOTTOM_BAR } from "@/lib/app-bottom-bar";
 import { DESIGNER_CHAT_OPEN_EVENT } from "@/lib/designer-chat-events";
 import { orderStatusLabel } from "@/lib/order-status";
 import { ChatBox } from "./ChatBox";
@@ -110,11 +111,12 @@ export function DesignerOrderChatFab() {
   return (
     <>
       <div
-        className={`fixed bottom-[84px] left-4 z-[60] w-[360px] max-w-[calc(100vw-2rem)] transition-all duration-300 ease-out origin-bottom-left ${
+        className={`fixed left-4 z-[60] w-[360px] max-w-[calc(100vw-2rem)] transition-all duration-300 ease-out origin-bottom-left ${
           open
             ? "scale-100 opacity-100 translate-y-0"
             : "scale-90 opacity-0 translate-y-4 pointer-events-none"
         }`}
+        style={{ bottom: `calc(${FLOATING_ABOVE_BOTTOM_BAR} + 2.75rem)` }}
       >
         <div className="absolute -inset-px rounded-2xl bg-gradient-to-br from-amber-500/20 via-transparent to-transparent blur-sm" />
 
@@ -234,18 +236,19 @@ export function DesignerOrderChatFab() {
       </div>
 
       <div
-        className={`fixed bottom-4 left-4 z-[60] transition-all duration-500 ${
+        className={`fixed left-4 z-[60] transition-all duration-500 ${
           appeared ? "translate-y-0 opacity-100" : "translate-y-8 opacity-0"
         }`}
+        style={{ bottom: FLOATING_ABOVE_BOTTOM_BAR }}
       >
         <button
           type="button"
           onClick={() => setOpen((prev) => !prev)}
           aria-label={open ? "Fechar conversa — dúvidas" : "Abrir conversa — dúvidas no pedido"}
-          className={`group relative flex h-14 w-14 items-center justify-center rounded-2xl shadow-xl transition-all duration-200 active:scale-95 ${
+          className={`group relative flex h-9 w-9 items-center justify-center rounded-lg shadow-md transition-all duration-200 active:scale-95 ${
             open
               ? "bg-zinc-800 shadow-black/50 hover:bg-zinc-700"
-              : "bg-gradient-to-br from-amber-400 to-amber-600 shadow-amber-600/40 hover:from-amber-300 hover:to-amber-500"
+              : "bg-gradient-to-br from-amber-400 to-amber-600 shadow-amber-600/30 hover:from-amber-300 hover:to-amber-500"
           }`}
         >
           <span
@@ -253,7 +256,7 @@ export function DesignerOrderChatFab() {
               open ? "scale-100 opacity-100 rotate-0" : "scale-0 opacity-0 rotate-90"
             }`}
           >
-            <svg className="h-5 w-5 text-white" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+            <svg className="h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
               <path d="M1 1l10 10M11 1L1 11" />
             </svg>
           </span>
@@ -262,13 +265,13 @@ export function DesignerOrderChatFab() {
               open ? "scale-0 opacity-0 -rotate-90" : "scale-100 opacity-100 rotate-0"
             }`}
           >
-            <svg className="h-6 w-6 text-zinc-950" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg className="h-4 w-4 text-zinc-950" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 0 1-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8Z" />
             </svg>
           </span>
 
           {!open && totalUnread > 0 && (
-            <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-black text-white shadow-md shadow-red-500/40">
+            <span className="absolute -right-1 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-red-500 px-0.5 text-[8px] font-black text-white shadow-md shadow-red-500/40">
               {totalUnread > 9 ? "9+" : totalUnread}
             </span>
           )}
@@ -284,7 +287,7 @@ export function DesignerOrderChatFab() {
         </button>
 
         {!open && totalUnread > 0 && (
-          <span className="pointer-events-none absolute inset-0 animate-ping rounded-2xl bg-amber-400/25" />
+          <span className="pointer-events-none absolute inset-0 animate-ping rounded-lg bg-amber-400/25" />
         )}
       </div>
     </>

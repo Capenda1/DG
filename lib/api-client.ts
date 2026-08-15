@@ -209,15 +209,19 @@ export type LoginResult =
   | AuthSession
   | { mfaRequired: true; mfaToken: string };
 
+export type LoginIdentifier =
+  | { email: string; phone?: never }
+  | { phone: string; email?: never };
+
 export async function loginRequest(
-  email: string,
+  identifier: LoginIdentifier,
   password: string,
 ): Promise<LoginResult> {
   const res = await fetchWithDeadline(apiUrl("/api/session/login"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ ...identifier, password }),
   });
   if (!res.ok) {
     const message = await readErrorMessage(res);
@@ -226,6 +230,28 @@ export async function loginRequest(
     throw err;
   }
   return res.json() as Promise<LoginResult>;
+}
+
+export async function registerClientRequest(body: {
+  name: string;
+  phone: string;
+  isCompany: boolean;
+  nif?: string;
+  password: string;
+}): Promise<AuthSession> {
+  const res = await fetchWithDeadline(apiUrl("/api/session/register"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const message = await readErrorMessage(res);
+    const err = new Error(message) as ApiRequestError;
+    err.status = res.status;
+    throw err;
+  }
+  return res.json() as Promise<AuthSession>;
 }
 
 export async function verifyMfaLoginRequest(
@@ -399,6 +425,8 @@ export async function createUserAsAdmin(body: {
   password?: string;
   role: UserRole;
   phone?: string;
+  isCompany?: boolean;
+  nif?: string;
 }): Promise<{ user: AuthSession["user"] }> {
   const s = loadSession();
   if (!s) {
@@ -417,6 +445,9 @@ export type AdminUpdateUserBody = {
   name?: string;
   role?: UserRole;
   phone?: string;
+  isCompany?: boolean;
+  nif?: string;
+  active?: boolean;
 };
 
 export async function updateUserAsAdmin(
@@ -929,11 +960,22 @@ export type OrderListItem = {
   /** Preenchidos quando o pedido está «Entregue». */
   deliveredAt?: string | null;
   deliveredBy?: { id: string; email: string; name: string } | null;
+  cancellationReason?: string | null;
+  cancelledAt?: string | null;
+  cancelledFromStatus?: string | null;
+  cancelledBy?: { id: string; email: string; name: string } | null;
   /** Último documento PDF registado (Fase 2). */
   lastDocumentModel?: InvoiceDocumentModelValue | null;
   lastDocumentNumber?: string | null;
   lastDocumentIssuedAt?: string | null;
-  client: { id: string; email: string; name: string; phone?: string | null };
+  client: {
+    id: string;
+    email: string;
+    name: string;
+    phone?: string | null;
+    clientType?: "INDIVIDUAL" | "COMPANY" | null;
+    nif?: string | null;
+  };
   designer: { id: string; email: string; name: string } | null;
   attendant?: { id: string; email: string; name: string } | null;
   _count: { items: number; artVersions: number };
@@ -956,6 +998,7 @@ export type OrderItemRow = {
   unitPrice: unknown;
   productionProcess: string;
   skuCode?: string | null;
+  productVariantId?: string | null;
   /** Snapshot do catálogo (tipo de peça, cor, tamanho, SKU, etc.). */
   metadata?: Record<string, unknown> | null;
 };
@@ -1771,6 +1814,8 @@ export type CounterClientHit = {
   email: string;
   name: string;
   phone: string | null;
+  clientType?: "INDIVIDUAL" | "COMPANY" | null;
+  nif?: string | null;
   createdAt: string;
 };
 
@@ -1789,7 +1834,8 @@ export async function searchCounterClients(
 export async function registerCounterQuickClient(body: {
   name: string;
   phone?: string;
-  email?: string;
+  isCompany?: boolean;
+  nif?: string;
 }): Promise<CounterClientHit> {
   return apiJson<CounterClientHit>("/api/orders/counter/clients", {
     method: "POST",
@@ -1862,12 +1908,43 @@ export async function listCounterInsumos(): Promise<CounterInsumoListItem[]> {
 
 export async function createCounterOrder(body: {
   clientId?: string;
-  quickClient?: { name: string; phone?: string; email?: string };
+  quickClient?: {
+    name: string;
+    phone?: string;
+    isCompany?: boolean;
+    nif?: string;
+  };
   items: CreateCounterOrderLine[];
   notes?: string;
 }): Promise<OrderDetail> {
   return apiJson<OrderDetail>("/api/orders/counter", {
     method: "POST",
+    auth: true,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+/** Substitui artigos de um rascunho de balcão (editar passo 1 sem novo pedido). */
+export async function replaceCounterOrderItems(
+  orderId: string,
+  body: { items: CreateCounterOrderLine[]; notes?: string },
+): Promise<OrderDetail> {
+  return apiJson<OrderDetail>(`/api/orders/${orderId}/counter-items`, {
+    method: "PATCH",
+    auth: true,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+/** Cliente online: substitui artigos do próprio rascunho. */
+export async function replaceClientDraftOrderItems(
+  orderId: string,
+  body: { items: CreateOrderBody["items"]; notes?: string },
+): Promise<OrderDetail> {
+  return apiJson<OrderDetail>(`/api/orders/${orderId}/draft-items`, {
+    method: "PATCH",
     auth: true,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -1898,11 +1975,24 @@ export async function adminSetOrderPrice(
 export async function adminChangeOrderStatus(
   orderId: string,
   status: string,
+  cancellationReason?: string,
 ): Promise<OrderListItem> {
   return apiJson<OrderListItem>(`/api/orders/${orderId}/status`, {
     method: "PATCH",
     auth: true,
-    body: JSON.stringify({ status }),
+    body: JSON.stringify({ status, cancellationReason }),
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+export async function reopenCancelledOrder(
+  orderId: string,
+  reason?: string,
+): Promise<OrderListItem> {
+  return apiJson<OrderListItem>(`/api/orders/${orderId}/reopen`, {
+    method: "POST",
+    auth: true,
+    body: JSON.stringify({ reason }),
     headers: { "Content-Type": "application/json" },
   });
 }

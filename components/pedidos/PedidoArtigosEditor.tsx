@@ -1,7 +1,8 @@
 "use client";
 
-import { memo } from "react";
+import { memo, useMemo } from "react";
 import type { CatalogProduct } from "@/lib/api-client";
+import { useCollapsiblePedidoLines } from "@/components/pedidos/useCollapsiblePedidoLines";
 import {
   APPAREL_COLORS,
   APPAREL_COLOR_PREVIEW_HEX,
@@ -244,6 +245,13 @@ function PedidoArtigosEditorInner({
   const t = editorTheme(uiVariant);
   const isLight =
     uiVariant === "pdvLight" || uiVariant === "conta" || uiVariant === "pdvCompact";
+  const collapseEnabled =
+    embedded || uiVariant === "pdvCompact" || uiVariant === "conta";
+  const lineIds = useMemo(() => lines.map((l) => l.id), [lines]);
+  const { isExpanded, expand, collapseActive } = useCollapsiblePedidoLines(
+    lineIds,
+    collapseEnabled,
+  );
 
   const header = embedded ? (
     <div className="flex justify-end">
@@ -324,29 +332,77 @@ function PedidoArtigosEditorInner({
               ? "Preço unit. (Kz) — por peça"
               : "Preço unit. (AOA) — por peça";
 
+        const expanded = isExpanded(line.id);
+        const summaryLabel = apparelLineSummaryLabel(line);
+
         return (
-          <div key={line.id} className={t.lineCard}>
+          <div
+            key={line.id}
+            className={
+              collapseActive && !expanded
+                ? `${t.lineCard} !space-y-0 !py-2.5`
+                : t.lineCard
+            }
+          >
             <div className="flex items-center justify-between gap-2">
-              <span className={t.lineMeta}>
-                Artigo {index + 1}
-                {lineTotal > 0 ? (
-                  <span className={`ml-2 ${t.lineAccent}`}>
-                    · {lineTotal}{" "}
-                    {lineTotal === 1 ? "peça" : "peças"}
-                  </span>
-                ) : null}
-              </span>
-              {lines.length > 1 ? (
+              {collapseActive ? (
                 <button
                   type="button"
-                  onClick={() => removeLine(line.id)}
-                  className={t.remove}
+                  onClick={() => expand(line.id)}
+                  className="min-w-0 flex-1 text-left"
+                  aria-expanded={expanded}
                 >
-                  Remover
+                  <span className={t.lineMeta}>
+                    Artigo {index + 1}
+                    {!expanded ? (
+                      <span className="ml-2 font-normal text-zinc-500 dark:text-zinc-400">
+                        {summaryLabel
+                          ? `· ${summaryLabel}`
+                          : "· Minimizado — tocar para editar"}
+                      </span>
+                    ) : lineTotal > 0 ? (
+                      <span className={`ml-2 ${t.lineAccent}`}>
+                        · {lineTotal}{" "}
+                        {lineTotal === 1 ? "peça" : "peças"}
+                      </span>
+                    ) : null}
+                  </span>
                 </button>
-              ) : null}
+              ) : (
+                <span className={t.lineMeta}>
+                  Artigo {index + 1}
+                  {lineTotal > 0 ? (
+                    <span className={`ml-2 ${t.lineAccent}`}>
+                      · {lineTotal}{" "}
+                      {lineTotal === 1 ? "peça" : "peças"}
+                    </span>
+                  ) : null}
+                </span>
+              )}
+              <div className="flex shrink-0 items-center gap-2">
+                {collapseActive && !expanded ? (
+                  <button
+                    type="button"
+                    onClick={() => expand(line.id)}
+                    className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400"
+                  >
+                    Editar
+                  </button>
+                ) : null}
+                {lines.length > 1 ? (
+                  <button
+                    type="button"
+                    onClick={() => removeLine(line.id)}
+                    className={t.remove}
+                  >
+                    Remover
+                  </button>
+                ) : null}
+              </div>
             </div>
 
+            {expanded ? (
+            <>
             <div className={t.lineGrid}>
               <div>
                 <label htmlFor={`tipo-${line.id}`} className={t.label}>
@@ -464,9 +520,9 @@ function PedidoArtigosEditorInner({
                     </option>
                   ))}
                 </select>
-                {uiVariant === "conta" ? (
+                {uiVariant !== "dark" ? (
                   <div
-                    className="mt-2 flex flex-wrap gap-1.5"
+                    className="mt-2 flex flex-wrap gap-2"
                     role="radiogroup"
                     aria-label="Escolher cor"
                   >
@@ -480,6 +536,7 @@ function PedidoArtigosEditorInner({
                           role="radio"
                           aria-checked={selected}
                           title={c.label}
+                          aria-label={c.label}
                           onClick={() =>
                             patchLine(line.id, {
                               colorId: c.id,
@@ -490,10 +547,14 @@ function PedidoArtigosEditorInner({
                                 ),
                             })
                           }
-                          className={`h-8 w-8 rounded-full ring-2 ring-offset-2 ring-offset-zinc-950 transition ${
+                          className={`h-9 w-9 rounded-full border border-black/10 ring-2 ring-offset-2 transition sm:h-8 sm:w-8 ${
+                            uiVariant === "conta"
+                              ? "ring-offset-zinc-950"
+                              : "ring-offset-white dark:ring-offset-zinc-900"
+                          } ${
                             selected
                               ? "scale-110 ring-amber-400"
-                              : "ring-transparent hover:ring-zinc-600"
+                              : "ring-transparent hover:ring-zinc-400 dark:hover:ring-zinc-600"
                           }`}
                           style={{ backgroundColor: hex }}
                         />
@@ -606,6 +667,8 @@ function PedidoArtigosEditorInner({
 
             {uiVariant === "conta" && apparelLineSummaryLabel(line) ? (
               <p className={t.lineSummary}>{apparelLineSummaryLabel(line)}</p>
+            ) : null}
+            </>
             ) : null}
           </div>
         );

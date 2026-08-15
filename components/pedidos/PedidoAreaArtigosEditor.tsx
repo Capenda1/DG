@@ -1,6 +1,6 @@
 "use client";
 
-import { memo } from "react";
+import { memo, useMemo } from "react";
 import type { CatalogProduct } from "@/lib/api-client";
 import {
   areaLineLabel,
@@ -12,6 +12,7 @@ import { formatMoney } from "@/lib/format-money";
 import { variantsForProduct } from "@/lib/pedido-generic-lines";
 import { dadivaInput } from "@/lib/dadiva-ui-classes";
 import type { PedidoArtigosEditorUiVariant } from "@/components/pedidos/PedidoArtigosEditor";
+import { useCollapsiblePedidoLines } from "@/components/pedidos/useCollapsiblePedidoLines";
 
 type Props = {
   catalog: CatalogProduct[] | null;
@@ -93,6 +94,13 @@ function PedidoAreaArtigosEditorInner({
   const t = theme(uiVariant);
   const cat = catalog ?? [];
   const products = filterAreaCatalogProducts(cat);
+  const collapseEnabled =
+    embedded || uiVariant === "pdvCompact" || uiVariant === "conta";
+  const lineIds = useMemo(() => lines.map((l) => l.id), [lines]);
+  const { isExpanded, expand, collapseActive } = useCollapsiblePedidoLines(
+    lineIds,
+    collapseEnabled,
+  );
 
   const header = embedded ? (
     <div className="flex justify-end">
@@ -152,29 +160,74 @@ function PedidoAreaArtigosEditorInner({
           const areaM2 =
             w != null && h != null ? Math.round(w * h * 1000) / 1000 : null;
           const lineTotal = parseFloat(line.lineTotal.replace(",", "."));
+          const expanded = isExpanded(line.id);
 
           return (
-            <div key={line.id} className={t.lineCard}>
+            <div
+              key={line.id}
+              className={
+                collapseActive && !expanded
+                  ? `${t.lineCard} !space-y-0 !py-2.5`
+                  : t.lineCard
+              }
+            >
               <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                  Peça {idx + 1}
-                  {label ? (
-                    <span className="ml-2 font-normal text-zinc-500">
-                      · {label}
-                    </span>
-                  ) : null}
-                </span>
-                {lines.length > 1 ? (
+                {collapseActive ? (
                   <button
                     type="button"
-                    onClick={() => removeLine(line.id)}
-                    className={t.remove}
+                    onClick={() => expand(line.id)}
+                    className="min-w-0 flex-1 text-left"
+                    aria-expanded={expanded}
                   >
-                    Remover
+                    <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                      Peça {idx + 1}
+                      {!expanded ? (
+                        <span className="ml-2 font-normal text-zinc-500">
+                          {label
+                            ? `· ${label}`
+                            : "· Minimizado — tocar para editar"}
+                        </span>
+                      ) : label ? (
+                        <span className="ml-2 font-normal text-zinc-500">
+                          · {label}
+                        </span>
+                      ) : null}
+                    </span>
                   </button>
-                ) : null}
+                ) : (
+                  <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                    Peça {idx + 1}
+                    {label ? (
+                      <span className="ml-2 font-normal text-zinc-500">
+                        · {label}
+                      </span>
+                    ) : null}
+                  </span>
+                )}
+                <div className="flex shrink-0 items-center gap-2">
+                  {collapseActive && !expanded ? (
+                    <button
+                      type="button"
+                      onClick={() => expand(line.id)}
+                      className="text-[11px] font-bold text-orange-600 dark:text-orange-400"
+                    >
+                      Editar
+                    </button>
+                  ) : null}
+                  {lines.length > 1 ? (
+                    <button
+                      type="button"
+                      onClick={() => removeLine(line.id)}
+                      className={t.remove}
+                    >
+                      Remover
+                    </button>
+                  ) : null}
+                </div>
               </div>
 
+              {expanded ? (
+              <>
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="block">
                   <span className={t.label}>Produto</span>
@@ -284,6 +337,8 @@ function PedidoAreaArtigosEditorInner({
                     {formatMoney(lineTotal)} Kz
                   </strong>
                 </p>
+              ) : null}
+              </>
               ) : null}
             </div>
           );

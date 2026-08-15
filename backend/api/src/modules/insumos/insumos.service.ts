@@ -292,6 +292,131 @@ export class InsumosService {
     return movimento;
   }
 
+  /**
+   * Repõe exactamente o stock que continua líquido como saída para o pedido.
+   * Usa os movimentos reais (incluindo descontos parciais), não as regras actuais.
+   */
+  async restoreOrderStockForCancellation(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    userId: string,
+  ): Promise<number> {
+    const rows = await tx.movimentoInsumo.findMany({
+      where: {
+        orderId,
+        OR: [
+          { tipo: MovimentoTipo.SAIDA_PEDIDO },
+          {
+            tipo: MovimentoTipo.ENTRADA,
+            nota: 'Reposição automática por cancelamento do pedido',
+          },
+        ],
+      },
+      select: { insumoId: true, tipo: true, quantidade: true, nota: true },
+    });
+    const netByInsumo = new Map<string, Prisma.Decimal>();
+    for (const row of rows) {
+      const current = netByInsumo.get(row.insumoId) ?? new Prisma.Decimal(0);
+      const isEntry =
+        row.tipo === MovimentoTipo.ENTRADA &&
+        row.nota === 'Reposição automática por cancelamento do pedido';
+      netByInsumo.set(
+        row.insumoId,
+        isEntry ? current.minus(row.quantidade) : current.plus(row.quantidade),
+      );
+    }
+
+    let restored = 0;
+    for (const [insumoId, quantity] of netByInsumo) {
+      if (quantity.lte(0)) continue;
+      await tx.movimentoInsumo.create({
+        data: {
+          insumoId,
+          tipo: MovimentoTipo.ENTRADA,
+          quantidade: quantity,
+          nota: 'Reposição automática por cancelamento do pedido',
+          orderId,
+          userId,
+        },
+      });
+      await tx.insumo.update({
+        where: { id: insumoId },
+        data: { stockActual: { increment: quantity.toNumber() } },
+      });
+      restored += 1;
+    }
+    return restored;
+  }
+
+  /**
+   * Reaplica apenas o stock que foi reposto pelo cancelamento. A operação falha
+   * por inteiro se algum insumo já não tiver saldo suficiente.
+   */
+  async reapplyOrderStockForReopen(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    userId: string,
+  ): Promise<number> {
+    const rows = await tx.movimentoInsumo.findMany({
+      where: {
+        orderId,
+        OR: [
+          {
+            tipo: MovimentoTipo.ENTRADA,
+            nota: 'Reposição automática por cancelamento do pedido',
+          },
+          {
+            tipo: MovimentoTipo.SAIDA_PEDIDO,
+            nota: 'Reaplicação automática por reabertura do pedido',
+          },
+        ],
+      },
+      select: { insumoId: true, tipo: true, quantidade: true, nota: true },
+    });
+    const netByInsumo = new Map<string, Prisma.Decimal>();
+    for (const row of rows) {
+      const current = netByInsumo.get(row.insumoId) ?? new Prisma.Decimal(0);
+      netByInsumo.set(
+        row.insumoId,
+        row.tipo === MovimentoTipo.ENTRADA &&
+          row.nota === 'Reposição automática por cancelamento do pedido'
+          ? current.plus(row.quantidade)
+          : current.minus(row.quantidade),
+      );
+    }
+
+    const quantities = [...netByInsumo.entries()].filter(([, q]) => q.gt(0));
+    for (const [insumoId, quantity] of quantities) {
+      const insumo = await tx.insumo.findUnique({
+        where: { id: insumoId },
+        select: { nome: true, unidade: true, stockActual: true },
+      });
+      if (!insumo || new Prisma.Decimal(insumo.stockActual).lt(quantity)) {
+        throw new BadRequestException(
+          `Não é possível reabrir: stock insuficiente de ${insumo?.nome ?? 'um insumo'} (${insumo?.stockActual.toString() ?? '0'} ${insumo?.unidade ?? ''} disponível).`,
+        );
+      }
+    }
+
+    for (const [insumoId, quantity] of quantities) {
+      await tx.movimentoInsumo.create({
+        data: {
+          insumoId,
+          tipo: MovimentoTipo.SAIDA_PEDIDO,
+          quantidade: quantity,
+          nota: 'Reaplicação automática por reabertura do pedido',
+          orderId,
+          userId,
+        },
+      });
+      await tx.insumo.update({
+        where: { id: insumoId },
+        data: { stockActual: { decrement: quantity.toNumber() } },
+      });
+    }
+    return quantities.length;
+  }
+
   /* ─── Consumos (Nível 2) ─── */
 
   async listConsumos() {

@@ -92,7 +92,7 @@ export function AdminAppShell({ children }: { children: ReactNode }) {
     } catch {
       /* ignore */
     }
-    hardNavigateReplace(ROUTES.login);
+    hardNavigateReplace(ROUTES.admin.login);
   }, []);
 
   useEffect(() => {
@@ -105,7 +105,7 @@ export function AdminAppShell({ children }: { children: ReactNode }) {
         method: "POST",
         credentials: "include",
       }).finally(() => {
-        hardNavigateReplace(ROUTES.login);
+        hardNavigateReplace(ROUTES.admin.login);
       });
     }
     window.addEventListener(SESSION_INVALIDATED_EVENT, onSessionInvalidated);
@@ -214,7 +214,7 @@ export function AdminAppShell({ children }: { children: ReactNode }) {
   function logout() {
     void logoutRequest().finally(() => {
       setSession(null);
-      hardNavigateReplace(ROUTES.login);
+      hardNavigateReplace(ROUTES.admin.login);
     });
   }
 

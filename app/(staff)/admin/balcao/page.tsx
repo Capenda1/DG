@@ -35,6 +35,7 @@ import {
   openFinancePdvSession,
   PAYMENT_METHOD_LABELS,
   registerCounterQuickClient,
+  replaceCounterOrderItems,
   searchCounterClients,
   shareBalcaoDraftWithDesignTeam,
   submitOrder,
@@ -540,12 +541,14 @@ export default function AdminPedidoBalcaoPage() {
 
   const [quickName, setQuickName] = useState("");
   const [quickPhone, setQuickPhone] = useState("");
-  const [quickEmail, setQuickEmail] = useState("");
+  const [quickIsCompany, setQuickIsCompany] = useState(false);
+  const [quickNif, setQuickNif] = useState("");
   const [quickRegDialogOpen, setQuickRegDialogOpen] = useState(false);
   const [quickRegDraft, setQuickRegDraft] = useState({
     name: "",
     phone: "",
-    email: "",
+    isCompany: false,
+    nif: "",
   });
   const [quickRegDialogErr, setQuickRegDialogErr] = useState<string | null>(
     null,
@@ -864,7 +867,8 @@ export default function AdminPedidoBalcaoPage() {
     if (clearQuickFields) {
       setQuickName("");
       setQuickPhone("");
-      setQuickEmail("");
+      setQuickIsCompany(false);
+      setQuickNif("");
     }
   }, []);
 
@@ -872,12 +876,13 @@ export default function AdminPedidoBalcaoPage() {
     setQuickRegDraft({
       name: quickName,
       phone: quickPhone,
-      email: quickEmail,
+      isCompany: quickIsCompany,
+      nif: quickNif,
     });
     setQuickRegDialogErr(null);
     setQuickRegBusy(false);
     setQuickRegDialogOpen(true);
-  }, [quickName, quickPhone, quickEmail]);
+  }, [quickName, quickPhone, quickIsCompany, quickNif]);
 
   const closeQuickRegDialog = useCallback(() => {
     setQuickRegDialogOpen(false);
@@ -900,7 +905,10 @@ export default function AdminPedidoBalcaoPage() {
       );
       return;
     }
-    const emailTrim = quickRegDraft.email.trim();
+    if (quickRegDraft.isCompany && !quickRegDraft.nif.trim()) {
+      setQuickRegDialogErr("Indica o NIF da empresa.");
+      return;
+    }
     const phoneApi =
       qp && isAngolaPhoneComplete(quickRegDraft.phone)
         ? angolaPhoneApiDigits(quickRegDraft.phone)
@@ -912,12 +920,16 @@ export default function AdminPedidoBalcaoPage() {
       const created = await registerCounterQuickClient({
         name,
         ...(phoneApi ? { phone: phoneApi } : {}),
-        ...(emailTrim ? { email: emailTrim } : {}),
+        isCompany: quickRegDraft.isCompany,
+        ...(quickRegDraft.isCompany
+          ? { nif: quickRegDraft.nif.trim() }
+          : {}),
       });
       setSelectedClient(created);
       setQuickName(created.name);
       setQuickPhone(displayPhoneAsMask(created.phone));
-      setQuickEmail(created.email ?? "");
+      setQuickIsCompany(created.clientType === "COMPANY");
+      setQuickNif(created.nif ?? "");
       setClientQuery("");
       setClientHits([]);
       closeQuickRegDialog();
@@ -1177,6 +1189,10 @@ export default function AdminPedidoBalcaoPage() {
       );
       return false;
     }
+    if (quickIsCompany && !quickNif.trim()) {
+      setErr("Indica o NIF da empresa ou desactiva a conta de empresa.");
+      return false;
+    }
     setErr(null);
     return true;
   }
@@ -1240,21 +1256,25 @@ export default function AdminPedidoBalcaoPage() {
         setStep1BusyAction(null);
         return;
       }
-      const order = await createCounterOrder({
-        ...(selectedClient
-          ? { clientId: selectedClient.id }
-          : {
-              quickClient: {
-                name: quickName.trim(),
-                phone:
-                  quickPhone.trim() && isAngolaPhoneComplete(quickPhone)
-                    ? angolaPhoneApiDigits(quickPhone)
-                    : undefined,
-                email: quickEmail.trim() || undefined,
-              },
-            }),
-        items: [...apparelItems, ...parsedInsumos.items],
-      });
+      const items = [...apparelItems, ...parsedInsumos.items];
+      const order = draftOrder
+        ? await replaceCounterOrderItems(draftOrder.id, { items })
+        : await createCounterOrder({
+            ...(selectedClient
+              ? { clientId: selectedClient.id }
+              : {
+                  quickClient: {
+                    name: quickName.trim(),
+                    phone:
+                      quickPhone.trim() && isAngolaPhoneComplete(quickPhone)
+                        ? angolaPhoneApiDigits(quickPhone)
+                        : undefined,
+                    isCompany: quickIsCompany,
+                    ...(quickIsCompany ? { nif: quickNif.trim() } : {}),
+                  },
+                }),
+            items,
+          });
 
       setDraftOrder(order);
       setPdvStep(orderNeedsTextileModelagem(order) ? 2 : 3);
@@ -1264,7 +1284,13 @@ export default function AdminPedidoBalcaoPage() {
       setReceivedInput("");
       setDiscountInput("");
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Erro ao criar rascunho.");
+      setErr(
+        e instanceof Error
+          ? e.message
+          : draftOrder
+            ? "Erro ao actualizar artigos do rascunho."
+            : "Erro ao criar rascunho.",
+      );
     } finally {
       setBusy(false);
       setStep1BusyAction(null);
@@ -1347,21 +1373,27 @@ export default function AdminPedidoBalcaoPage() {
         setStep1BusyAction(null);
         return;
       }
-      await createCounterOrder({
-        ...(selectedClient
-          ? { clientId: selectedClient.id }
-          : {
-              quickClient: {
-                name: quickName.trim(),
-                phone:
-                  quickPhone.trim() && isAngolaPhoneComplete(quickPhone)
-                    ? angolaPhoneApiDigits(quickPhone)
-                    : undefined,
-                email: quickEmail.trim() || undefined,
-              },
-            }),
-        items: [...apparelItems, ...parsedInsumos.items],
-      });
+      const items = [...apparelItems, ...parsedInsumos.items];
+      if (draftOrder) {
+        await replaceCounterOrderItems(draftOrder.id, { items });
+      } else {
+        await createCounterOrder({
+          ...(selectedClient
+            ? { clientId: selectedClient.id }
+            : {
+                quickClient: {
+                  name: quickName.trim(),
+                  phone:
+                    quickPhone.trim() && isAngolaPhoneComplete(quickPhone)
+                      ? angolaPhoneApiDigits(quickPhone)
+                      : undefined,
+                  isCompany: quickIsCompany,
+                  ...(quickIsCompany ? { nif: quickNif.trim() } : {}),
+                },
+              }),
+          items,
+        });
+      }
 
       resetFormForNextCounterCustomer();
     } catch (e) {
@@ -1625,7 +1657,7 @@ export default function AdminPedidoBalcaoPage() {
   }
 
   return (
-    <div className={!draftOrder ? "pb-36" : "pb-20"}>
+    <div className={pdvStep === 1 ? "pb-36" : "pb-20"}>
       <div className="mx-auto max-w-5xl px-4 pt-8 sm:px-5">
         <div className="relative mb-5 flex flex-col gap-4 overflow-hidden rounded-xl border border-amber-200/35 bg-gradient-to-br from-white via-amber-50/40 to-violet-50/25 px-4 py-4 shadow-[0_14px_40px_-20px_rgba(245,158,11,0.35)] dark:border-amber-500/25 dark:from-zinc-900 dark:via-amber-950/40 dark:to-violet-950/25 dark:shadow-[0_14px_40px_-12px_rgba(0,0,0,0.55)] sm:mb-6 sm:flex-row sm:items-center sm:justify-between sm:gap-5 sm:px-6 sm:py-4">
           <span
@@ -1653,7 +1685,7 @@ export default function AdminPedidoBalcaoPage() {
               </h1>
             </div>
             <div className="relative z-[1] mt-4 min-w-0 sm:mt-0 sm:flex-1 sm:max-w-xl">
-              <BalcaoStepper step={draftOrder ? pdvStep : 1} />
+              <BalcaoStepper step={pdvStep} />
             </div>
           </div>
           <Link
@@ -1744,7 +1776,7 @@ export default function AdminPedidoBalcaoPage() {
               </h2>
               <p className="mt-1 text-[11px] leading-snug text-zinc-600 dark:text-zinc-400">
                 «Guardar» cria o cliente na base de dados de imediato; depois pode pesquisá-lo pelo nome,
-                telefone ou e-mail.
+                telefone ou NIF.
               </p>
             </div>
             <div className="space-y-3 px-4 py-4">
@@ -1758,7 +1790,9 @@ export default function AdminPedidoBalcaoPage() {
               ) : null}
               <div>
                 <label className={dadivaLabelCompact} htmlFor="quick-reg-name">
-                  Nome completo *
+                  {quickRegDraft.isCompany
+                    ? "Nome da empresa *"
+                    : "Nome completo *"}
                 </label>
                 <input
                   id="quick-reg-name"
@@ -1770,6 +1804,54 @@ export default function AdminPedidoBalcaoPage() {
                   className={`${dadivaInput} !py-2`}
                 />
               </div>
+              <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-zinc-200 bg-zinc-50/80 px-3 py-3 dark:border-zinc-600 dark:bg-zinc-800/50">
+                <span>
+                  <span className="block text-sm font-semibold text-zinc-800 dark:text-zinc-100">
+                    Conta de empresa
+                  </span>
+                  <span className="mt-0.5 block text-[11px] text-zinc-500 dark:text-zinc-400">
+                    Activa para pessoa jurídica (NIF obrigatório).
+                  </span>
+                </span>
+                <span className="relative inline-flex shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={quickRegDraft.isCompany}
+                    onChange={(e) =>
+                      setQuickRegDraft((d) => ({
+                        ...d,
+                        isCompany: e.target.checked,
+                        nif: e.target.checked ? d.nif : "",
+                      }))
+                    }
+                    disabled={quickRegBusy}
+                    className="peer sr-only"
+                  />
+                  <span className="h-6 w-11 rounded-full bg-zinc-300 transition peer-checked:bg-amber-500 dark:bg-zinc-700" />
+                  <span className="pointer-events-none absolute left-1 top-1 h-4 w-4 rounded-full bg-white shadow-sm transition peer-checked:translate-x-5" />
+                </span>
+              </label>
+              {quickRegDraft.isCompany ? (
+                <div>
+                  <label
+                    className={dadivaLabelCompact}
+                    htmlFor="quick-reg-nif"
+                  >
+                    NIF da empresa *
+                  </label>
+                  <input
+                    id="quick-reg-nif"
+                    type="text"
+                    inputMode="numeric"
+                    value={quickRegDraft.nif}
+                    onChange={(e) =>
+                      setQuickRegDraft((d) => ({ ...d, nif: e.target.value }))
+                    }
+                    className={`${dadivaInput} !py-2`}
+                    placeholder="Número de identificação fiscal"
+                  />
+                </div>
+              ) : null}
               <div>
                 <label
                   className={dadivaLabelCompact}
@@ -1791,21 +1873,6 @@ export default function AdminPedidoBalcaoPage() {
                   }
                   placeholder="+244 9XX XXX XXX"
                   maxLength={18}
-                  className={`${dadivaInput} !py-2`}
-                />
-              </div>
-              <div>
-                <label className={dadivaLabelCompact} htmlFor="quick-reg-email">
-                  E-mail
-                </label>
-                <input
-                  id="quick-reg-email"
-                  type="email"
-                  autoComplete="email"
-                  value={quickRegDraft.email}
-                  onChange={(e) =>
-                    setQuickRegDraft((d) => ({ ...d, email: e.target.value }))
-                  }
                   className={`${dadivaInput} !py-2`}
                 />
               </div>
@@ -1881,7 +1948,15 @@ export default function AdminPedidoBalcaoPage() {
                 )}
               </div>
             ) : null}
-            <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => setPdvStep(1)}
+              className="mt-4 text-xs font-semibold text-amber-800 underline decoration-amber-400/80 underline-offset-2 hover:text-amber-700 dark:text-amber-300 dark:hover:text-amber-200"
+            >
+              ← Voltar a cliente e artigos
+            </button>
+            <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
               <Link
                 href={contaPedidoModelagemPath(draftOrder.id)}
                 className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl border border-violet-500/50 bg-violet-500/15 px-4 py-3 text-sm font-semibold text-violet-950 shadow-sm ring-1 ring-violet-400/25 transition hover:bg-violet-500/25 dark:text-violet-100 dark:hover:bg-violet-500/20 sm:min-w-[12rem]"
@@ -1940,6 +2015,14 @@ export default function AdminPedidoBalcaoPage() {
               <span className="h-1 w-1 animate-pulse rounded-full bg-amber-500 motion-reduce:animate-none" aria-hidden />
               Rascunho {draftOrder.orderNumber}
             </p>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => setPdvStep(1)}
+              className="mt-3 text-xs font-semibold text-amber-800 underline decoration-amber-400/80 underline-offset-2 hover:text-amber-700 dark:text-amber-300 dark:hover:text-amber-200"
+            >
+              ← Voltar a cliente e artigos
+            </button>
             {orderNeedsTextileModelagem(draftOrder) ? (
               <div className="mt-3 space-y-3">
                 <button
@@ -2291,8 +2374,16 @@ export default function AdminPedidoBalcaoPage() {
             </div>
           </section>
         ) : null}
-        {!draftOrder ? (
+        {pdvStep === 1 ? (
           <>
+            {draftOrder ? (
+              <div className="mb-3 rounded-xl border border-amber-400/40 bg-amber-50/90 px-3.5 py-3 text-xs leading-relaxed text-amber-950 dark:border-amber-500/35 dark:bg-amber-950/40 dark:text-amber-100">
+                A editar o rascunho{" "}
+                <span className="font-mono font-bold">{draftOrder.orderNumber}</span>
+                . Podes acrescentar ou alterar artigos; ao continuar, o pedido é
+                actualizado (não cria um novo).
+              </div>
+            ) : null}
             <div className="space-y-4">
                 <BalcaoClienteSection
                   selectedClient={selectedClient}
@@ -2306,7 +2397,8 @@ export default function AdminPedidoBalcaoPage() {
                     setClientQuery("");
                     setQuickName(c.name ?? "");
                     setQuickPhone(displayPhoneAsMask(c.phone));
-                    setQuickEmail(c.email ?? "");
+                    setQuickIsCompany(c.clientType === "COMPANY");
+                    setQuickNif(c.nif ?? "");
                   }}
                   onClearClient={() => pickNewClientMode(true)}
                   onEditClient={() => pickNewClientMode(false)}
@@ -2316,12 +2408,17 @@ export default function AdminPedidoBalcaoPage() {
                   <BalcaoClienteHiddenFields
                     quickName={quickName}
                     quickPhone={quickPhone}
-                    quickEmail={quickEmail}
+                    quickIsCompany={quickIsCompany}
+                    quickNif={quickNif}
                     onNameChange={setQuickName}
                     onPhoneChange={(v) =>
                       setQuickPhone(formatWhatsAppMaskInput(v))
                     }
-                    onEmailChange={setQuickEmail}
+                    onIsCompanyChange={(v) => {
+                      setQuickIsCompany(v);
+                      if (!v) setQuickNif("");
+                    }}
+                    onNifChange={setQuickNif}
                     showManual
                   />
                 ) : null}
@@ -2384,6 +2481,15 @@ export default function AdminPedidoBalcaoPage() {
               busy={busy}
               busyAction={step1BusyAction}
               cashTurnBlocking={cashTurnBlocking}
+              editingExistingDraft={!!draftOrder}
+              onReturnToPayment={
+                draftOrder
+                  ? () =>
+                      setPdvStep(
+                        orderNeedsTextileModelagem(draftOrder) ? 2 : 3,
+                      )
+                  : undefined
+              }
               onContinue={() => void createDraftAndContinue()}
               onPause={() => void saveDraftPauseFromStep1()}
             />

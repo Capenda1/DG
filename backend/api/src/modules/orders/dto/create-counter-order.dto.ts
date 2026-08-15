@@ -3,10 +3,11 @@ import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
   IsArray,
-  IsEmail,
+  IsBoolean,
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
   MaxLength,
   MinLength,
   ValidateIf,
@@ -35,9 +36,14 @@ export class QuickBalcaoClientDto {
   phone?: string;
 
   @IsOptional()
-  @IsEmail()
-  @MaxLength(254)
-  email?: string;
+  @IsBoolean()
+  isCompany?: boolean;
+
+  @ValidateIf((o: QuickBalcaoClientDto) => o.isCompany === true)
+  @IsString()
+  @MaxLength(32)
+  @Matches(/\S/, { message: 'O NIF é obrigatório para contas de empresa.' })
+  nif?: string;
 }
 
 export class CreateCounterOrderDto {

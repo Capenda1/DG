@@ -246,6 +246,24 @@ export function usePedidoAreaArtigos(catalog: CatalogProduct[] | null) {
 
 
 
+  const setLines = useCallback(
+
+    (
+
+      next: AreaLineForm[] | ((prev: AreaLineForm[]) => AreaLineForm[]),
+
+    ) => {
+
+      setRawLines(next);
+
+    },
+
+    [],
+
+  );
+
+
+
   return {
 
     lines,
@@ -267,6 +285,8 @@ export function usePedidoAreaArtigos(catalog: CatalogProduct[] | null) {
     patchQty,
 
     resetLines,
+
+    setLines,
 
   };
 

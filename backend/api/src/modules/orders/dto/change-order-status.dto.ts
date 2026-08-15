@@ -1,5 +1,11 @@
 import { OrderStatus, PaymentMethod } from '@prisma/client';
-import { IsEnum, IsOptional } from 'class-validator';
+import {
+  IsEnum,
+  IsOptional,
+  IsString,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 
 export class ChangeOrderStatusDto {
   @IsEnum(OrderStatus)
@@ -12,4 +18,11 @@ export class ChangeOrderStatusDto {
   @IsOptional()
   @IsEnum(PaymentMethod)
   paymentMethod?: PaymentMethod;
+
+  /** Obrigatório no serviço quando `status` é CANCELLED. */
+  @IsOptional()
+  @IsString()
+  @MinLength(3)
+  @MaxLength(2000)
+  cancellationReason?: string;
 }

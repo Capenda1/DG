@@ -6,7 +6,12 @@ import {
   resolveProtectedRedirect,
   verifyAccessToken,
 } from "@/lib/auth-middleware";
-import { normalizeUserRole, postLoginPath, ROUTES } from "@/lib/routes";
+import {
+  loginPathForArea,
+  normalizeUserRole,
+  postLoginPath,
+  ROUTES,
+} from "@/lib/routes";
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -51,7 +56,7 @@ export async function middleware(request: NextRequest) {
 }
 
 function redirectLogin(request: NextRequest, pathname: string) {
-  const url = new URL(ROUTES.login, request.url);
+  const url = new URL(loginPathForArea(pathname), request.url);
   const nextPath = normalizeAppPathnameSafe(pathname);
   if (nextPath && nextPath !== ROUTES.home && !isPublicAuthPath(nextPath)) {
     url.searchParams.set("next", nextPath);
@@ -71,6 +76,7 @@ function normalizeAppPathnameSafe(pathname: string): string {
 export const config = {
   matcher: [
     "/",
+    "/cadastro",
     "/admin/:path*",
     "/conta/:path*",
     "/login",

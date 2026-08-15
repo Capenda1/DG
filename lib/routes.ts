@@ -3,6 +3,10 @@
  */
 export const ROUTES = {
   login: "/login",
+  /** Entrada pública da área cliente. */
+  clientLogin: "/",
+  /** Auto-cadastro público de clientes. */
+  clientRegister: "/cadastro",
   loginRecuperar: "/login/recuperar",
   loginVerificar: "/login/verificar",
   loginRedefinir: "/login/redefinir",
@@ -13,6 +17,8 @@ export const ROUTES = {
   accountPedidoNovo: "/conta/pedidos/novo",
   admin: {
     root: "/admin",
+    /** Entrada reservada a ADMIN, DESIGNER e ATTENDANT. */
+    login: "/admin/login",
     produtos: "/admin/produtos",
     clientes: "/admin/clientes",
     pedidos: "/admin/pedidos",
@@ -47,8 +53,6 @@ export const ROUTES = {
     modelos: "/admin/modelos",
     /** Galeria de fotos na área do cliente (ADMIN + DESIGNER). */
     galeria: "/admin/galeria",
-    /** Ferramenta de restauro / melhoria de fotos raster (ADMIN e DESIGNER). */
-    restaurarImagem: "/admin/ferramentas/restaurar-imagem",
   },
 } as const;
 
@@ -102,7 +106,6 @@ export const DESIGNER_ADMIN_ALLOWED_HREFS = [
   ROUTES.admin.pedidos,
   ROUTES.admin.modelos,
   ROUTES.admin.galeria,
-  ROUTES.admin.restaurarImagem,
 ] as const;
 
 /** Atendente: PDV e pedidos (sem stock/insumos). */
@@ -165,6 +168,11 @@ export function contaPedidoModelagemPath(orderId: string): string {
   return `/conta/pedidos/${orderId}/modelagem`;
 }
 
+/** Editar artigos de um rascunho online (passo 1). */
+export function contaPedidoArtigosPath(orderId: string): string {
+  return `/conta/pedidos/${orderId}/artigos`;
+}
+
 /**
  * Após sair da ficha do pedido na área cliente (ou equivalente para staff).
  * Atendente ou administrador em pedido de balcão regressa ao PDV; designer à fila criativa.
@@ -211,6 +219,14 @@ export function postLoginPath(role: string): string {
     return ROUTES.account;
   }
   return ROUTES.login;
+}
+
+/** Login correcto para a área onde a sessão perdeu validade. */
+export function loginPathForArea(pathname: string): string {
+  const p = normalizeAppPathname(pathname);
+  return p === ROUTES.admin.root || p.startsWith(`${ROUTES.admin.root}/`)
+    ? ROUTES.admin.login
+    : ROUTES.clientLogin;
 }
 
 /**

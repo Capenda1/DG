@@ -1,9 +1,9 @@
 import Link from "next/link";
 
 export const ORDER_WIZARD_STEPS = [
-  { n: 1, label: "Artigos" },
-  { n: 2, label: "Design" },
-  { n: 3, label: "Submissão" },
+  { n: 1, label: "Artigos", title: "Escolher os artigos" },
+  { n: 2, label: "Design", title: "Design" },
+  { n: 3, label: "Submissão", title: "Submissão" },
 ] as const;
 
 export type OrderWizardStep = 1 | 2 | 3;
@@ -15,7 +15,7 @@ export function OrderCreationWizard({
   className = "",
 }: {
   activeStep: OrderWizardStep;
-  /** Se definido, o passo 1 é clicável (ex.: detalhe do pedido). */
+  /** Se definido, o passo 1 («Escolher os artigos») é clicável a partir dos passos 2 e 3. */
   step1Href?: string;
   className?: string;
 }) {
@@ -60,10 +60,16 @@ export function OrderCreationWizard({
               ? "bg-emerald-500/5 ring-1 ring-emerald-500/15"
               : "opacity-45"
         }`;
+        const canGoToArtigos = step.n === 1 && Boolean(step1Href) && !active;
         return (
           <li key={step.n} className="flex min-w-0 flex-1 items-center gap-0.5 sm:gap-1">
-            {step.n === 1 && step1Href && !active ? (
-              <Link href={step1Href} className={boxClass} title={`Ver ${step.label}`}>
+            {canGoToArtigos ? (
+              <Link
+                href={step1Href!}
+                className={`${boxClass} cursor-pointer transition hover:ring-amber-400/40`}
+                title={step.title}
+                aria-label={step.title}
+              >
                 {inner}
               </Link>
             ) : (

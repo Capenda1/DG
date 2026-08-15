@@ -2,7 +2,7 @@
 
 import type { CounterClientHit } from "@/lib/api-client";
 import { balcaoPdvCard } from "@/lib/balcao-pdv-ui";
-import { dadivaInput, dadivaInputReadonly, dadivaLabelCompact } from "@/lib/dadiva-ui-classes";
+import { dadivaInput, dadivaLabelCompact } from "@/lib/dadiva-ui-classes";
 import { displayPhoneAsMask } from "@/lib/whatsapp-mask";
 
 type Props = {
@@ -55,9 +55,19 @@ export function BalcaoClienteSection({
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">
               {selectedClient.name}
+              {selectedClient.clientType === "COMPANY" ? (
+                <span className="ml-2 rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900 dark:bg-amber-950/50 dark:text-amber-200">
+                  Empresa
+                </span>
+              ) : null}
             </p>
             <p className="truncate text-[11px] text-zinc-600 dark:text-zinc-400">
-              {[selectedClient.phone, selectedClient.email]
+              {[
+                selectedClient.phone,
+                selectedClient.clientType === "COMPANY" && selectedClient.nif
+                  ? `NIF ${selectedClient.nif}`
+                  : null,
+              ]
                 .filter(Boolean)
                 .join(" · ")}
             </p>
@@ -85,7 +95,7 @@ export function BalcaoClienteSection({
           <input
             value={clientQuery}
             onChange={(e) => onClientQueryChange(e.target.value)}
-            placeholder="Nome, +244 ou e-mail…"
+            placeholder="Nome, telefone ou NIF…"
             className={`${dadivaInput} mt-1 !py-2`}
           />
           {clientSearchBusy ? (
@@ -102,9 +112,15 @@ export function BalcaoClienteSection({
                   >
                     <span className="font-medium text-zinc-900 dark:text-zinc-100">
                       {c.name}
+                      {c.clientType === "COMPANY" ? " · Empresa" : ""}
                     </span>
                     <span className="text-[10px] text-zinc-500">
-                      {[c.phone, c.email].filter(Boolean).join(" · ")}
+                      {[
+                        c.phone,
+                        c.clientType === "COMPANY" && c.nif ? `NIF ${c.nif}` : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
                     </span>
                   </button>
                 </li>
@@ -121,55 +137,87 @@ export function syncClientFromHit(c: CounterClientHit) {
   return {
     name: c.name ?? "",
     phone: displayPhoneAsMask(c.phone),
-    email: c.email ?? "",
+    isCompany: c.clientType === "COMPANY",
+    nif: c.nif ?? "",
   };
 }
 
-/** Campos ocultos para validação — quickName etc. mantidos no page. */
+/** Campos manuais de validação — estado mantido na página do balcão. */
 export function BalcaoClienteHiddenFields({
   quickName,
   quickPhone,
-  quickEmail,
+  quickIsCompany,
+  quickNif,
   onNameChange,
   onPhoneChange,
-  onEmailChange,
+  onIsCompanyChange,
+  onNifChange,
   showManual,
 }: {
   quickName: string;
   quickPhone: string;
-  quickEmail: string;
+  quickIsCompany: boolean;
+  quickNif: string;
   onNameChange: (v: string) => void;
   onPhoneChange: (v: string) => void;
-  onEmailChange: (v: string) => void;
+  onIsCompanyChange: (v: boolean) => void;
+  onNifChange: (v: string) => void;
   showManual: boolean;
 }) {
   if (!showManual) return null;
   return (
     <div className="grid gap-2 sm:grid-cols-2">
       <div className="sm:col-span-2">
-        <label className={dadivaLabelCompact}>Nome completo *</label>
+        <label className={dadivaLabelCompact}>
+          {quickIsCompany ? "Nome da empresa *" : "Nome completo *"}
+        </label>
         <input
           value={quickName}
           onChange={(e) => onNameChange(e.target.value)}
           className={`${dadivaInput} mt-1 !py-2`}
         />
       </div>
-      <div>
+      <div className="sm:col-span-2">
+        <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-zinc-200 bg-zinc-50/80 px-3 py-3 dark:border-zinc-600 dark:bg-zinc-800/50">
+          <span>
+            <span className="block text-sm font-semibold text-zinc-800 dark:text-zinc-100">
+              Conta de empresa
+            </span>
+            <span className="mt-0.5 block text-[11px] text-zinc-500 dark:text-zinc-400">
+              Activa para pessoa jurídica (NIF obrigatório).
+            </span>
+          </span>
+          <span className="relative inline-flex shrink-0">
+            <input
+              type="checkbox"
+              checked={quickIsCompany}
+              onChange={(e) => onIsCompanyChange(e.target.checked)}
+              className="peer sr-only"
+            />
+            <span className="h-6 w-11 rounded-full bg-zinc-300 transition peer-checked:bg-amber-500 dark:bg-zinc-700" />
+            <span className="pointer-events-none absolute left-1 top-1 h-4 w-4 rounded-full bg-white shadow-sm transition peer-checked:translate-x-5" />
+          </span>
+        </label>
+      </div>
+      {quickIsCompany ? (
+        <div className="sm:col-span-2">
+          <label className={dadivaLabelCompact}>NIF da empresa *</label>
+          <input
+            type="text"
+            inputMode="numeric"
+            value={quickNif}
+            onChange={(e) => onNifChange(e.target.value)}
+            className={`${dadivaInput} mt-1 !py-2`}
+          />
+        </div>
+      ) : null}
+      <div className="sm:col-span-2">
         <label className={dadivaLabelCompact}>WhatsApp (+244)</label>
         <input
           type="tel"
           value={quickPhone}
           onChange={(e) => onPhoneChange(e.target.value)}
           className={`${dadivaInput} mt-1 !py-2`}
-        />
-      </div>
-      <div>
-        <label className={dadivaLabelCompact}>E-mail</label>
-        <input
-          type="email"
-          value={quickEmail}
-          onChange={(e) => onEmailChange(e.target.value)}
-          className={`${dadivaInputReadonly} ${dadivaInput} mt-1 !py-2`}
         />
       </div>
     </div>

@@ -224,29 +224,6 @@ export function IconGallery({ className }: { className?: string }) {
   );
 }
 
-/** Restauro / melhoria rápida de raster (contraste + nitidez). */
-export function IconImageEnhance({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <rect x="3" y="3" width="18" height="18" rx="2.5" />
-      <path d="m12 6 1 2 2 1-2 1-1 2-1-2-2-1 2-1 1-2z" />
-      <circle cx="8" cy="16" r="1" fill="currentColor" stroke="none" />
-      <circle cx="16" cy="15" r="0.85" fill="currentColor" stroke="none" />
-    </svg>
-  );
-}
-
 export function IconUserPlus({ className }: { className?: string }) {
   return (
     <svg

@@ -1,7 +1,5 @@
 "use client";
 
-/* eslint-disable react-hooks/set-state-in-effect -- carregar imagem da peça e pré-calcular frente/costas (pipeline assíncrono) */
-
 import {
   forwardRef,
   useCallback,
@@ -32,10 +30,12 @@ import {
 import { modelagemModelImageUrl } from "@/lib/modelagem-model-images";
 import {
   angleDeg,
+  canvasBufferSize,
   clamp01,
   clampScale,
   DESKTOP_HIT_MIN_PX,
   dist,
+  getCanvasDpr,
   midpoint,
   normalizeRotation,
   TOUCH_HIT_MIN_PX,
@@ -45,9 +45,11 @@ import {
 } from "@/components/modelagem/modelagem-touch-gestures";
 
 /* ─────────────────────────────────────────────────────────────────────────────
- * Tinting fotorrealista: multiply + máscara de luminância.
- * Recebe a metade esquerda da foto (frente da peça), aplica a cor do pedido
- * e remove o fundo branco com base na luminância do pixel original.
+ * Tinting fotorrealista: multiply + recorte da peça.
+ * Recebe a metade esquerda da foto (frente da peça) e aplica a cor do pedido.
+ * Mockups preparados (`scripts/prepare-garment-mockup.mjs`) já trazem fundo
+ * transparente e peça branca; fotos legadas têm fundo branco opaco e são
+ * recortadas por luminância.
  * ───────────────────────────────────────────────────────────────────────────── */
 function prepareTintedGarment(
   img: HTMLImageElement,
@@ -68,8 +70,13 @@ function prepareTintedGarment(
   /* 1 – Desenhar a vista escolhida */
   ctx.drawImage(img, srcX, 0, fw, ih, 0, 0, fw, ih);
 
-  /* 2 – Guardar luminância original para a máscara */
+  /* 2 – Guardar pixels originais (luminância + alfa) para a máscara */
   const orig = ctx.getImageData(0, 0, fw, ih).data;
+
+  let hasCutout = false;
+  for (let i = 3; i < orig.length; i += 4) {
+    if (orig[i] < 16) { hasCutout = true; break; }
+  }
 
   /* 3 – Multiply com a cor do pedido → branco torna-se a cor, sombras escurecem-na */
   ctx.globalCompositeOperation = "multiply";
@@ -77,14 +84,19 @@ function prepareTintedGarment(
   ctx.fillRect(0, 0, fw, ih);
   ctx.globalCompositeOperation = "source-over";
 
-  /* 4 – Máscara de luminância: pixels quasi-brancos → transparentes */
+  /* 4 – Recorte: alfa do próprio ficheiro ou, em fotos legadas, por luminância */
   const colored = ctx.getImageData(0, 0, fw, ih);
   const d = colored.data;
-  for (let i = 0; i < d.length; i += 4) {
-    const lum = orig[i] * 0.299 + orig[i + 1] * 0.587 + orig[i + 2] * 0.114;
-    if (lum > 215) {
-      /* Transição suave: 215 → completamente opaco, 250 → completamente transparente */
-      d[i + 3] = Math.round(d[i + 3] * Math.max(0, (250 - lum) / 35));
+  if (hasCutout) {
+    /* O fillRect pinta também a zona transparente; repor o alfa original. */
+    for (let i = 3; i < d.length; i += 4) d[i] = orig[i];
+  } else {
+    for (let i = 0; i < d.length; i += 4) {
+      const lum = orig[i] * 0.299 + orig[i + 1] * 0.587 + orig[i + 2] * 0.114;
+      if (lum > 215) {
+        /* Transição suave: 215 → completamente opaco, 250 → completamente transparente */
+        d[i + 3] = Math.round(d[i + 3] * Math.max(0, (250 - lum) / 35));
+      }
     }
   }
   ctx.putImageData(colored, 0, 0);
@@ -93,17 +105,39 @@ function prepareTintedGarment(
 
 /* ─────────────────────────────────────────────────────────────────────────────
  * Helpers de layout — recebem W e H reais do canvas responsivo.
- * A arte ocupa ~88% da altura e é centrada horizontalmente.
+ * A área de arte é um quadrado baseado no menor lado (evita faixas laterais
+ * enormes em ecrãs altos / telemóvel).
  * ───────────────────────────────────────────────────────────────────────────── */
 const ART_CANVAS_SIZE = 512;
 const ART_FACTOR = 0.93;
+const ART_FACTOR_FILL = 0.98;
 
-function artLayout(W: number, H: number) {
-  const artSize = H * ART_FACTOR;
+function artLayout(W: number, H: number, fill = false) {
+  const factor = fill ? ART_FACTOR_FILL : ART_FACTOR;
+  /* Quadrado de arte limitado ao menor lado — alinhado à peça contain. */
+  const artSize = Math.min(W, H) * factor;
   const artX = (W - artSize) / 2;
-  const artY = (H - artSize) / 2 - H * 0.015;
+  const artY = (H - artSize) / 2;
   const artScale = artSize / ART_CANVAS_SIZE;
   return { artSize, artX, artY, artScale };
+}
+
+/** Rectângulo de desenho da peça — sempre completa (contain), sem cortar. */
+function garmentPlacement(
+  fw: number,
+  fh: number,
+  W: number,
+  H: number,
+  fill = false,
+) {
+  /* `fill` no telemóvel: usa quase 100 % do canvas, mas mantém contain. */
+  const pad = fill ? 0.99 : 0.93;
+  const scale = Math.min(W / fw, H / fh) * pad;
+  const dw = fw * scale;
+  const dh = fh * scale;
+  const dx = (W - dw) / 2;
+  const dy = (H - dh) / 2;
+  return { dx, dy, dw, dh, scale };
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -120,8 +154,8 @@ export interface DraggableLayer {
   locked?: boolean;
 }
 
-function layerBounds(layer: DraggableLayer, W: number, H: number, hitMinPx: number) {
-  const { artSize, artX, artY, artScale } = artLayout(W, H);
+function layerBounds(layer: DraggableLayer, W: number, H: number, hitMinPx: number, fill = false, dpr = 1) {
+  const { artSize, artX, artY, artScale } = artLayout(W, H, fill);
   const cx = artX + layer.x * artSize;
   const cy = artY + layer.y * artSize;
   let hw: number, hh: number;
@@ -129,12 +163,12 @@ function layerBounds(layer: DraggableLayer, W: number, H: number, hitMinPx: numb
     const lines = (layer.text ?? "T").split("\n");
     const maxLen = Math.max(...lines.map((l) => l.length), 1);
     const fs = (layer.fontSize ?? 40) * layer.scale * artScale;
-    hw = fs * maxLen * 0.32 + 12;
-    hh = fs * lines.length * 0.64 + 12;
+    hw = fs * maxLen * 0.32 + 12 * dpr;
+    hh = fs * lines.length * 0.64 + 12 * dpr;
   } else {
     const dw = (layer.widthRel ?? 0.4) * ART_CANVAS_SIZE * layer.scale * artScale;
-    hw = dw / 2 + 10;
-    hh = dw / (layer.aspect ?? 1) / 2 + 10;
+    hw = dw / 2 + 10 * dpr;
+    hh = dw / (layer.aspect ?? 1) / 2 + 10 * dpr;
   }
   const halfMin = hitMinPx / 2;
   return { cx, cy, hw: Math.max(hw, halfMin), hh: Math.max(hh, halfMin) };
@@ -147,10 +181,12 @@ function hitTest(
   W: number,
   H: number,
   hitMinPx: number,
+  fill = false,
+  dpr = 1,
 ): string | null {
   const sorted = [...layers].sort((a, b) => b.zIndex - a.zIndex);
   for (const layer of sorted) {
-    const { cx: lx, cy: ly, hw, hh } = layerBounds(layer, W, H, hitMinPx);
+    const { cx: lx, cy: ly, hw, hh } = layerBounds(layer, W, H, hitMinPx, fill, dpr);
     const angle = -(layer.rotationDeg * Math.PI) / 180;
     const dx = cx - lx, dy = cy - ly;
     const rx = dx * Math.cos(angle) - dy * Math.sin(angle);
@@ -203,7 +239,7 @@ export type MockupViewer2DProps = {
   touchFriendly?: boolean;
 };
 
-type CanvasSize = { w: number; h: number };
+type CanvasSize = { w: number; h: number; dpr: number };
 
 export const MockupViewer2D = forwardRef<MockupViewer2DHandle, MockupViewer2DProps>(
 function MockupViewer2D({
@@ -220,12 +256,21 @@ function MockupViewer2D({
   const outRef = useRef<HTMLCanvasElement>(null);
   const hlRef  = useRef<HTMLCanvasElement>(null);
 
-  const [garmentImage,  setGarmentImage]  = useState<HTMLImageElement | null>(null);
-  const [tintedFront,   setTintedFront]   = useState<HTMLCanvasElement | null>(null);
-  const [tintedBack,    setTintedBack]    = useState<HTMLCanvasElement | null>(null);
+  const tintKey = `${productType}:${baseColorHex}`;
+  const [tintedGarment, setTintedGarment] = useState<{
+    key: string;
+    front: HTMLCanvasElement;
+    back: HTMLCanvasElement;
+  } | null>(null);
+  const tintedFront =
+    tintedGarment?.key === tintKey ? tintedGarment.front : null;
+  const tintedBack =
+    tintedGarment?.key === tintKey ? tintedGarment.back : null;
   /* side é controlado pelo pai via activeSideProp */
   const side = activeSideProp;
-  const [canvasSize, setCanvasSize] = useState<CanvasSize>({ w: 800, h: 600 });
+  const [canvasSize, setCanvasSize] = useState<CanvasSize>(() => ({
+    ...canvasBufferSize(800, 600),
+  }));
 
   /* Refs para o useImperativeHandle aceder sempre aos valores mais recentes sem TDZ */
   const tintedFrontRef = useRef<HTMLCanvasElement | null>(null);
@@ -247,6 +292,8 @@ function MockupViewer2D({
       canvas.width = W; canvas.height = H;
       const ctx = canvas.getContext("2d");
       if (!ctx) return null;
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
 
       /* Fundo estúdio luminoso */
       const bg = ctx.createRadialGradient(W*.5, H*.38, W*.04, W*.5, H*.5, Math.max(W,H)*.95);
@@ -268,14 +315,12 @@ function MockupViewer2D({
       floor.addColorStop(.70, "rgba(50,85,160,.05)"); floor.addColorStop(1, "rgba(0,0,0,0)");
       ctx.fillStyle = floor; ctx.fillRect(0, H*.62, W, H*.38);
 
-      const { artSize, artX, artY } = artLayout(W, H);
+      const { artSize, artX, artY } = artLayout(W, H, false);
       const tintedGarment = targetSide === "front" ? tintedFrontRef.current : tintedBackRef.current;
 
       if (tintedGarment) {
         const fw = tintedGarment.width, fh = tintedGarment.height;
-        const scale = Math.min(W/fw, H/fh) * 0.93;
-        const dw = fw*scale, dh = fh*scale;
-        const dx = (W-dw)/2, dy = (H-dh)/2 - H*0.02;
+        const { dx, dy, dw, dh } = garmentPlacement(fw, fh, W, H, false);
 
         const dropShadow = ctx.createRadialGradient(W*.5, dy+dh*.96, W*.01, W*.5, dy+dh*.96, W*.35);
         dropShadow.addColorStop(0, "rgba(0,0,0,0.50)"); dropShadow.addColorStop(0.5, "rgba(0,0,0,0.15)"); dropShadow.addColorStop(1, "rgba(0,0,0,0)");
@@ -349,55 +394,87 @@ function MockupViewer2D({
   const gestureRef = useRef<ActiveGesture | null>(null);
   const pointersRef = useRef(new Map<number, Point>());
   const layersRef = useRef<DraggableLayer[]>([]);
-  const hitMinPx = touchFriendly ? TOUCH_HIT_MIN_PX : DESKTOP_HIT_MIN_PX;
+  /* Hit em px de buffer (= CSS × DPR) para o alvo continuar ~44 CSS-px no touch. */
+  const hitMinPx =
+    (touchFriendly ? TOUCH_HIT_MIN_PX : DESKTOP_HIT_MIN_PX) * canvasSize.dpr;
   const hitMinRef = useRef(hitMinPx);
-  hitMinRef.current = hitMinPx;
+  const fillRef = useRef(touchFriendly);
+  const dprRef = useRef(canvasSize.dpr);
   const [hoveredId,  setHoveredId]  = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+
+  /* Mantém os handlers de ponteiro actualizados sem escrever em refs durante render. */
+  useLayoutEffect(() => {
+    hitMinRef.current = hitMinPx;
+    fillRef.current = touchFriendly;
+    dprRef.current = canvasSize.dpr;
+  }, [hitMinPx, touchFriendly, canvasSize.dpr]);
 
   /* ── Sincroniza layers ref ── */
   useEffect(() => { layersRef.current = layers ?? []; }, [layers]);
 
-  /* ── ResizeObserver: ajusta o canvas ao contentor real ── */
+  /* ── ResizeObserver: buffer = CSS × DPR (nitidez em ecrãs retina/móveis) ── */
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+
+    const applySize = (cssW: number, cssH: number) => {
+      if (cssW <= 10 || cssH <= 10) return;
+      const next = canvasBufferSize(cssW, cssH);
+      setCanvasSize((prev) =>
+        prev.w === next.w && prev.h === next.h && prev.dpr === next.dpr
+          ? prev
+          : next,
+      );
+    };
+
     const ro = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const { width, height } = entry.contentRect;
-        if (width > 10 && height > 10) {
-          setCanvasSize({ w: Math.round(width), h: Math.round(height) });
-        }
+        applySize(width, height);
       }
     });
     ro.observe(el);
-    return () => ro.disconnect();
+
+    /* DPR pode mudar (janela entre monitores / zoom OS) sem mudar o contentRect. */
+    const onDprChange = () => {
+      applySize(el.clientWidth, el.clientHeight);
+    };
+    const dprMq = window.matchMedia(
+      `(resolution: ${getCanvasDpr()}dppx)`,
+    );
+    dprMq.addEventListener?.("change", onDprChange);
+
+    return () => {
+      ro.disconnect();
+      dprMq.removeEventListener?.("change", onDprChange);
+    };
   }, []);
 
 
-  /* ── Carrega a foto da peça ── */
+  /* ── Carrega e tinge a foto da peça ── */
   useEffect(() => {
     let cancelled = false;
-    setGarmentImage(null);
     const img = new Image();
     img.crossOrigin = "anonymous";
-    img.onload  = () => { if (!cancelled) setGarmentImage(img); };
-    img.onerror = () => { if (!cancelled) setGarmentImage(null); };
+    img.onload = () => {
+      if (cancelled) return;
+      try {
+        setTintedGarment({
+          key: tintKey,
+          front: prepareTintedGarment(img, baseColorHex, "front"),
+          back: prepareTintedGarment(img, baseColorHex, "back"),
+        });
+      } catch {
+        setTintedGarment(null);
+      }
+    };
+    img.onerror = () => {
+      if (!cancelled) setTintedGarment(null);
+    };
     img.src = modelagemModelImageUrl(productType);
     return () => { cancelled = true; };
-  }, [productType]);
-
-  /* ── Pré-computa frente + costas quando a imagem ou cor mudam ── */
-  useEffect(() => {
-    if (!garmentImage) { setTintedFront(null); setTintedBack(null); return; }
-    try {
-      setTintedFront(prepareTintedGarment(garmentImage, baseColorHex, "front"));
-      setTintedBack (prepareTintedGarment(garmentImage, baseColorHex, "back"));
-    } catch {
-      setTintedFront(null);
-      setTintedBack(null);
-    }
-  }, [garmentImage, baseColorHex]);
+  }, [productType, baseColorHex, tintKey]);
 
   /* ── Canvas principal ── */
   useEffect(() => {
@@ -406,6 +483,8 @@ function MockupViewer2D({
     const ctx = out.getContext("2d");
     if (!ctx) return;
     const W = out.width, H = out.height;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
     ctx.clearRect(0, 0, W, H);
 
     /* Fundo principal — estúdio claro (evita o aspecto escuro/fusco) */
@@ -439,7 +518,7 @@ function MockupViewer2D({
     floor.addColorStop(1,   "rgba(0,0,0,0)");
     ctx.fillStyle = floor; ctx.fillRect(0, H * .62, W, H * .38);
 
-    const { artSize, artX, artY } = artLayout(W, H);
+    const { artSize, artX, artY } = artLayout(W, H, touchFriendly);
 
     const tintedGarment = side === "front" ? tintedFront : tintedBack;
 
@@ -447,13 +526,7 @@ function MockupViewer2D({
       /* ── Peça fotorrealista: foto tintada com multiply + fundo removido ── */
       const fw = tintedGarment.width;
       const fh = tintedGarment.height;
-
-      /* Escalar para caber no canvas mantendo o aspect ratio */
-      const scale = Math.min(W / fw, H / fh) * 0.93;
-      const dw = fw * scale;
-      const dh = fh * scale;
-      const dx = (W - dw) / 2;
-      const dy = (H - dh) / 2 - H * 0.02;
+      const { dx, dy, dw, dh } = garmentPlacement(fw, fh, W, H, touchFriendly);
 
       /* Sombra suave antes da peça */
       const dropShadow = ctx.createRadialGradient(W * .5, dy + dh * .96, W * .01, W * .5, dy + dh * .96, W * .35);
@@ -587,7 +660,7 @@ function MockupViewer2D({
     vig.addColorStop(1, "rgba(0,0,0,.16)");
     ctx.fillStyle = vig; ctx.fillRect(0, 0, W, H);
 
-  }, [artCanvasRef, drawVersion, productType, baseColorHex, tintedFront, tintedBack, side, canvasSize]);
+  }, [artCanvasRef, drawVersion, productType, baseColorHex, tintedFront, tintedBack, side, canvasSize, touchFriendly]);
 
   /* ── Canvas de highlight + guia de área de impressão ── */
   useEffect(() => {
@@ -601,7 +674,7 @@ function MockupViewer2D({
 
     /* ── Indicador de camada (seleccionada persistente + hover) ── */
     function drawLayerHandle(layer: DraggableLayer, isSelected: boolean, dragging: boolean) {
-      const { cx, cy, hw, hh } = layerBounds(layer, W, H, hitMinPx);
+      const { cx, cy, hw, hh } = layerBounds(layer, W, H, hitMinPx, touchFriendly, canvasSize.dpr);
       const angle = (layer.rotationDeg * Math.PI) / 180;
       c2d.save();
       c2d.translate(cx, cy);
@@ -613,15 +686,16 @@ function MockupViewer2D({
           ? "rgba(52,211,153,.95)"    // teal para seleccionada
           : "rgba(99,210,250,.75)";   // azul claro para hover
 
+      const dpr = canvasSize.dpr;
       c2d.strokeStyle = color;
-      c2d.lineWidth = isSelected ? 1.8 : 1.4;
-      c2d.setLineDash(isSelected ? [6, 3] : [4, 3]);
+      c2d.lineWidth = (isSelected ? 1.8 : 1.4) * dpr;
+      c2d.setLineDash(isSelected ? [6 * dpr, 3 * dpr] : [4 * dpr, 3 * dpr]);
       c2d.strokeRect(-hw, -hh, hw * 2, hh * 2);
       c2d.setLineDash([]);
 
       /* Cantos sólidos (L-handles) */
-      const mk = Math.max(6, Math.min(14, Math.min(hw, hh) * 0.3));
-      c2d.strokeStyle = color; c2d.lineWidth = 2; c2d.lineCap = "round";
+      const mk = Math.max(6 * dpr, Math.min(14 * dpr, Math.min(hw, hh) * 0.3));
+      c2d.strokeStyle = color; c2d.lineWidth = 2 * dpr; c2d.lineCap = "round";
       for (const [sx, sy] of [[-1,-1],[1,-1],[-1,1],[1,1]] as const) {
         c2d.beginPath();
         c2d.moveTo(sx * hw, sy * hh - sy * mk);
@@ -632,8 +706,8 @@ function MockupViewer2D({
 
       /* Ícone de mover (apenas no hover / drag) */
       if (!isSelected || dragging) {
-        const a = 7, b = 4;
-        c2d.strokeStyle = color; c2d.lineWidth = 1.5; c2d.lineCap = "round"; c2d.lineJoin = "round";
+        const a = 7 * dpr, b = 4 * dpr;
+        c2d.strokeStyle = color; c2d.lineWidth = 1.5 * dpr; c2d.lineCap = "round"; c2d.lineJoin = "round";
         c2d.beginPath(); c2d.moveTo(-a, 0); c2d.lineTo(a, 0); c2d.stroke();
         c2d.beginPath(); c2d.moveTo(a-b,-b); c2d.lineTo(a,0); c2d.lineTo(a-b,b); c2d.stroke();
         c2d.beginPath(); c2d.moveTo(-a+b,-b); c2d.lineTo(-a,0); c2d.lineTo(-a+b,b); c2d.stroke();
@@ -652,7 +726,7 @@ function MockupViewer2D({
       if (selLayer)  drawLayerHandle(selLayer,  true,  isDragging && hoveredId === selectedId);
       if (hovLayer)  drawLayerHandle(hovLayer,  false, false);
     }
-  }, [hoveredId, isDragging, layers, canvasSize, selectedId, hitMinPx]);
+  }, [hoveredId, isDragging, layers, canvasSize, selectedId, hitMinPx, touchFriendly]);
 
   /* ── Interacção de ponteiro (1 dedo = mover; 2 dedos = pinch + rotação) ── */
   const beginPinch = useCallback((
@@ -701,8 +775,8 @@ function MockupViewer2D({
       const targetId =
         g?.id ??
         selectedId ??
-        hitTest(midpoint(pA, pB).x, midpoint(pA, pB).y, arr, W, H, hitMinRef.current) ??
-        hitTest(pos.x, pos.y, arr, W, H, hitMinRef.current);
+        hitTest(midpoint(pA, pB).x, midpoint(pA, pB).y, arr, W, H, hitMinRef.current, fillRef.current, dprRef.current) ??
+        hitTest(pos.x, pos.y, arr, W, H, hitMinRef.current, fillRef.current, dprRef.current);
       if (targetId) {
         const layer = arr.find((l) => l.id === targetId);
         if (layer && !layer.locked) {
@@ -712,7 +786,7 @@ function MockupViewer2D({
       }
     }
 
-    const id = hitTest(pos.x, pos.y, arr, W, H, hitMinRef.current);
+    const id = hitTest(pos.x, pos.y, arr, W, H, hitMinRef.current, fillRef.current, dprRef.current);
     if (!id) { setHoveredId(null); return; }
     const layer = arr.find((l) => l.id === id)!;
     if (layer.locked) {
@@ -745,11 +819,11 @@ function MockupViewer2D({
     const g = gestureRef.current;
     if (!g) {
       const arr = layersRef.current;
-      setHoveredId(arr.length ? hitTest(pos.x, pos.y, arr, W, H, hitMinRef.current) : null);
+      setHoveredId(arr.length ? hitTest(pos.x, pos.y, arr, W, H, hitMinRef.current, fillRef.current, dprRef.current) : null);
       return;
     }
 
-    const { artSize } = artLayout(W, H);
+    const { artSize } = artLayout(W, H, fillRef.current);
 
     if (g.mode === "drag") {
       if (e.pointerId !== g.pointerId) return;
@@ -841,7 +915,7 @@ function MockupViewer2D({
       const pos = toCanvasCoords(e);
       const W = e.currentTarget.width, H = e.currentTarget.height;
       const arr = layersRef.current;
-      setHoveredId(arr.length ? hitTest(pos.x, pos.y, arr, W, H, hitMinRef.current) : null);
+      setHoveredId(arr.length ? hitTest(pos.x, pos.y, arr, W, H, hitMinRef.current, fillRef.current, dprRef.current) : null);
       if (!moved) onSelectLayer?.(id);
       return;
     }
@@ -895,82 +969,73 @@ function MockupViewer2D({
       />
 
       {/* ── Header flutuante ── */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-10 bg-gradient-to-b from-[#03050a]/90 via-[#03050a]/40 to-transparent px-4 pb-14 pt-3">
-        <div className="flex items-center justify-between gap-2">
-
-          {/* Esquerda: badge "Ao vivo" */}
-          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/[0.13] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-emerald-300/80 ring-1 ring-emerald-400/20">
-            <span className="relative flex h-1.5 w-1.5 shrink-0">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-40" />
-              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
+      <div
+        className={`pointer-events-none absolute inset-x-0 top-0 z-10 bg-gradient-to-b from-[#03050a]/90 via-[#03050a]/40 to-transparent ${
+          touchFriendly ? "px-2 pb-6 pt-1.5" : "px-4 pb-14 pt-3"
+        }`}
+      >
+        {!touchFriendly ? (
+          <div className="flex items-center justify-between gap-2">
+            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/[0.13] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-emerald-300/80 ring-1 ring-emerald-400/20">
+              <span className="relative flex h-1.5 w-1.5 shrink-0">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-40" />
+                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
+              </span>
+              Ao vivo
             </span>
-            Ao vivo
-          </span>
 
-          {/* Centro: etiqueta da camada seleccionada */}
-          {selectedLayerLabel && side === "front" && (
-            <div className="flex min-w-0 flex-1 justify-center">
-              <span className="inline-flex max-w-[160px] items-center gap-1 truncate rounded-full border border-amber-500/20 bg-zinc-950/50 px-2.5 py-0.5 text-[10px] font-medium text-amber-300/85 backdrop-blur-sm">
-                <svg viewBox="0 0 12 12" className="h-2.5 w-2.5 shrink-0 text-amber-400/70" fill="none" stroke="currentColor" strokeWidth="1.6">
-                  <rect x="1" y="1" width="10" height="10" rx="1.5" />
-                  <line x1="4" y1="6" x2="8" y2="6" />
-                  <line x1="6" y1="4" x2="6" y2="8" />
-                </svg>
-                <span className="truncate">{selectedLayerLabel}</span>
-              </span>
-            </div>
-          )}
-
-          {/* Direita: contagem de camadas + caption */}
-          <div className="flex shrink-0 items-center gap-2">
-            {(layers?.length ?? 0) > 0 && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-zinc-800/70 px-2 py-0.5 text-[9px] font-medium text-zinc-400/80 ring-1 ring-white/[0.06] backdrop-blur-sm">
-                <svg viewBox="0 0 12 12" className="h-2.5 w-2.5" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <rect x="1" y="1" width="4.5" height="4.5" rx="0.8" />
-                  <rect x="6.5" y="1" width="4.5" height="4.5" rx="0.8" />
-                  <rect x="1" y="6.5" width="4.5" height="4.5" rx="0.8" />
-                  <rect x="6.5" y="6.5" width="4.5" height="4.5" rx="0.8" />
-                </svg>
-                {layers!.length}
-              </span>
+            {selectedLayerLabel && side === "front" && (
+              <div className="flex min-w-0 flex-1 justify-center">
+                <span className="inline-flex max-w-[160px] items-center gap-1 truncate rounded-full border border-amber-500/20 bg-zinc-950/50 px-2.5 py-0.5 text-[10px] font-medium text-amber-300/85 backdrop-blur-sm">
+                  <svg viewBox="0 0 12 12" className="h-2.5 w-2.5 shrink-0 text-amber-400/70" fill="none" stroke="currentColor" strokeWidth="1.6">
+                    <rect x="1" y="1" width="10" height="10" rx="1.5" />
+                    <line x1="4" y1="6" x2="8" y2="6" />
+                    <line x1="6" y1="4" x2="6" y2="8" />
+                  </svg>
+                  <span className="truncate">{selectedLayerLabel}</span>
+                </span>
+              </div>
             )}
-            {caption && <span className="text-[10px] text-zinc-500/70">{caption}</span>}
+
+            <div className="flex shrink-0 items-center gap-2">
+              {(layers?.length ?? 0) > 0 && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-zinc-800/70 px-2 py-0.5 text-[9px] font-medium text-zinc-400/80 ring-1 ring-white/[0.06] backdrop-blur-sm">
+                  <svg viewBox="0 0 12 12" className="h-2.5 w-2.5" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <rect x="1" y="1" width="4.5" height="4.5" rx="0.8" />
+                    <rect x="6.5" y="1" width="4.5" height="4.5" rx="0.8" />
+                    <rect x="1" y="6.5" width="4.5" height="4.5" rx="0.8" />
+                    <rect x="6.5" y="6.5" width="4.5" height="4.5" rx="0.8" />
+                  </svg>
+                  {layers!.length}
+                </span>
+              )}
+              {caption && <span className="text-[10px] text-zinc-500/70">{caption}</span>}
+            </div>
           </div>
-        </div>
+        ) : null}
       </div>
 
       {/* ── Toggle Frente / Costas ── */}
-      <div className="pointer-events-auto absolute left-1/2 top-1.5 z-20 -translate-x-1/2">
+      <div
+        className={`pointer-events-auto absolute left-1/2 z-20 -translate-x-1/2 ${
+          touchFriendly ? "bottom-2 top-auto" : "top-1.5"
+        }`}
+      >
         <div className="flex rounded-full border border-white/[0.10] bg-black/60 p-0.5 shadow-lg shadow-black/40 backdrop-blur-md">
           {(["front", "back"] as const).map((s) => (
             <button
               key={s}
               type="button"
               onClick={() => onSideChange?.(s)}
-              className={`flex items-center gap-1.5 rounded-full px-3.5 py-1 text-[11px] font-semibold transition-all duration-150 ${
+              className={`flex items-center gap-1 rounded-full font-semibold transition-all duration-150 ${
+                touchFriendly ? "px-3 py-1.5 text-[10px]" : "gap-1.5 px-3.5 py-1 text-[11px]"
+              } ${
                 side === s
                   ? "bg-white/[0.14] text-white shadow-sm"
                   : "text-zinc-500 hover:text-zinc-300"
               }`}
             >
-              {s === "front" ? (
-                <>
-                  {/* Ícone frente */}
-                  <svg viewBox="0 0 14 14" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M5 2 C5 2 5.5 4 7 4 C8.5 4 9 2 9 2 L11 2.5 C12 2.8 13 4 13 5 L11.5 5.5 C11 4.5 10.5 4.2 10 4.2 L10 12 L4 12 L4 4.2 C3.5 4.2 3 4.5 2.5 5.5 L1 5 C1 4 2 2.8 3 2.5 Z" />
-                  </svg>
-                  Frente
-                </>
-              ) : (
-                <>
-                  {/* Ícone costas */}
-                  <svg viewBox="0 0 14 14" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M5 2 C5 2 5.5 4 7 4 C8.5 4 9 2 9 2 L11 2.5 C12 2.8 13 4 13 5 L11.5 5.5 C11 4.5 10.5 4.2 10 4.2 L10 12 L4 12 L4 4.2 C3.5 4.2 3 4.5 2.5 5.5 L1 5 C1 4 2 2.8 3 2.5 Z" />
-                    <path d="M5.5 6.5 Q7 5.5 8.5 6.5" strokeDasharray="1.5 1" />
-                  </svg>
-                  Costas
-                </>
-              )}
+              {s === "front" ? "Frente" : "Costas"}
             </button>
           ))}
         </div>
@@ -978,28 +1043,32 @@ function MockupViewer2D({
 
       {/* Aviso de vista de costas (arte está na frente) */}
       {side === "back" && (layers?.length ?? 0) > 0 && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center px-3">
-          <p className="inline-flex items-center gap-1.5 rounded-full border border-zinc-700/40 bg-black/55 px-4 py-1.5 text-[10px] font-medium text-zinc-500 backdrop-blur-xl">
-            <svg viewBox="0 0 12 12" className="h-2.5 w-2.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.6">
-              <circle cx="6" cy="6" r="4.5" /><line x1="6" y1="4" x2="6" y2="6.5" /><circle cx="6" cy="8.5" r=".5" fill="currentColor" />
-            </svg>
-            Vista de costas · a arte está na frente
+        <div
+          className={`pointer-events-none absolute inset-x-0 z-10 flex justify-center px-3 ${
+            touchFriendly ? "bottom-12" : "bottom-3"
+          }`}
+        >
+          <p className="inline-flex items-center gap-1.5 rounded-full border border-zinc-700/40 bg-black/55 px-3 py-1 text-[10px] font-medium text-zinc-500 backdrop-blur-xl">
+            Vista de costas · arte na frente
           </p>
         </div>
       )}
 
       {/* ── Estado vazio ── */}
       {(!layers || layers.length === 0) && (
-        <div className="pointer-events-none absolute inset-0 z-[5] flex flex-col items-center justify-center gap-3">
-          <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-white/[0.07] bg-white/[0.03] backdrop-blur-sm">
-            {/* Ícone camisola */}
-            <svg viewBox="0 0 40 40" fill="none" className="h-8 w-8 text-zinc-600" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M13 6 L6 12 L11 14 L11 34 L29 34 L29 14 L34 12 L27 6 C27 6 24 10 20 10 C16 10 13 6 13 6Z" />
-            </svg>
-          </div>
+        <div className={`pointer-events-none absolute inset-0 z-[5] flex flex-col items-center justify-center ${touchFriendly ? "gap-1.5" : "gap-3"}`}>
+          {!touchFriendly ? (
+            <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-white/[0.07] bg-white/[0.03] backdrop-blur-sm">
+              <svg viewBox="0 0 40 40" fill="none" className="h-8 w-8 text-zinc-600" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M13 6 L6 12 L11 14 L11 34 L29 34 L29 14 L34 12 L27 6 C27 6 24 10 20 10 C16 10 13 6 13 6Z" />
+              </svg>
+            </div>
+          ) : null}
           <div className="text-center">
-            <p className="text-[13px] font-semibold text-zinc-400/90">Sem elementos</p>
-            <p className="mt-0.5 text-[11px] text-zinc-600">Adiciona texto ou imagem no painel →</p>
+            <p className={`font-semibold text-zinc-400/90 ${touchFriendly ? "text-[12px]" : "text-[13px]"}`}>Sem elementos</p>
+            {!touchFriendly ? (
+              <p className="mt-0.5 text-[11px] text-zinc-600">Adiciona texto ou imagem no painel →</p>
+            ) : null}
           </div>
         </div>
       )}

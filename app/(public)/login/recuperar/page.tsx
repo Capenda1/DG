@@ -68,7 +68,7 @@ export default function RecuperarPalavraPassePage() {
       subtitle="Indique o email da conta de administrador."
       footer={
         <p className="text-center text-sm text-zinc-600 dark:text-zinc-400">
-          <Link href={ROUTES.login} className="font-semibold text-amber-700 underline-offset-2 hover:underline dark:text-amber-300">
+          <Link href={ROUTES.admin.login} className="font-semibold text-amber-700 underline-offset-2 hover:underline dark:text-amber-300">
             Voltar ao início de sessão
           </Link>
         </p>

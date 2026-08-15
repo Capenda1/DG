@@ -7,6 +7,9 @@ export type SessionUser = {
   /** ADMIN sem TOTP quando MFA_REQUIRE_ADMIN está activo no servidor. */
   mfaSetupRequired?: boolean;
   phone: string | null;
+  clientType?: "INDIVIDUAL" | "COMPANY" | null;
+  nif?: string | null;
+  active?: boolean;
   createdAt: string;
 };
 

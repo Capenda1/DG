@@ -22,7 +22,6 @@ import {
 export { loadReceiptLogoImage };
 import { formatMoney, formatMoneyReceiptCell } from "@/lib/format-money";
 import { receiptLineDescriptionFromOrderItem } from "@/lib/apparel-catalog";
-import { orderStatusLabel } from "@/lib/order-status";
 import { receiptShouldIncludeBankDetails, proFormaOmitsOrderStatus } from "@/lib/invoice-document-policy";
 
 type DocWithTable = jsPDF & {
@@ -125,11 +124,14 @@ export type PaymentReceiptPdfPayload = {
   orderNumber: string;
   paidAtLabel: string;
   clientName: string;
-  clientEmail: string;
+  /** NIF do cliente — só preenchido quando a conta é empresa. */
+  clientNif: string | null;
   originLabel: string;
   currency: string;
   /** Corpo da tabela: artigo, qtd, unitário, linha */
   tableBody: string[][];
+  /** Soma das quantidades de todas as linhas. */
+  articlesTotal: number;
   subtotalFmt: string;
   discountFmt: string;
   totalFmt: string;
@@ -137,7 +139,6 @@ export type PaymentReceiptPdfPayload = {
   receivedFmt: string | null;
   changeFmt: string | null;
   attendantLine: string | null;
-  statusLabel: string | null;
   clientPhone: string | null;
   /** Data/hora de recepção (PDV). */
   receptionDateLabel: string | null;
@@ -405,9 +406,12 @@ export function buildPaymentReceiptFromOrderDetail(
 ): PaymentReceiptPdfPayload {
   const currency = (order.currency ?? "AOA").toUpperCase();
   let gross = 0;
+  let articlesTotal = 0;
   const tableBody: string[][] = order.items.map((it) => {
     const up = moneyNum(it.unitPrice);
-    const lineTotal = Math.round(up * it.quantity * 100) / 100;
+    const qty = Math.max(0, Number(it.quantity) || 0);
+    articlesTotal += qty;
+    const lineTotal = Math.round(up * qty * 100) / 100;
     gross += lineTotal;
     const articleLabel = receiptLineDescriptionFromOrderItem(
       it.productName,
@@ -415,12 +419,13 @@ export function buildPaymentReceiptFromOrderDetail(
     );
     return [
       articleLabel,
-      String(it.quantity),
+      String(qty),
       formatMoneyReceiptCell(up, currency),
       formatMoneyReceiptCell(lineTotal, currency),
     ];
   });
   gross = Math.round(gross * 100) / 100;
+  articlesTotal = Math.round(articlesTotal * 1000) / 1000;
   const disc = Math.round(moneyNum(order.discountAmount) * 100) / 100;
   const total = Math.round(moneyNum(order.totalAmount) * 100) / 100;
 
@@ -484,12 +489,13 @@ export function buildPaymentReceiptFromOrderDetail(
       ? phoneRaw.trim()
       : null;
 
+  const isCompanyClient = order.client?.clientType === "COMPANY";
+  const nifRaw =
+    typeof order.client?.nif === "string" ? order.client.nif.trim() : "";
+  const clientNif = isCompanyClient ? nifRaw || "—" : null;
+
   const sellerHeader =
     opts?.sellerHeader ?? { ...DEFAULT_SELLER_HEADER };
-
-  const statusLabel = proFormaPreSubmit
-    ? null
-    : orderStatusLabel(order.status ?? "");
 
   return {
     sellerHeader,
@@ -498,10 +504,11 @@ export function buildPaymentReceiptFromOrderDetail(
     orderNumber: order.orderNumber,
     paidAtLabel,
     clientName: order.client?.name ?? "—",
-    clientEmail: order.client?.email ?? "—",
+    clientNif,
     originLabel,
     currency,
     tableBody,
+    articlesTotal,
     subtotalFmt: formatMoney(gross, currency),
     discountFmt: formatMoney(disc, currency),
     totalFmt: formatMoney(total, currency),
@@ -509,7 +516,6 @@ export function buildPaymentReceiptFromOrderDetail(
     receivedFmt,
     changeFmt,
     attendantLine,
-    statusLabel,
     clientPhone,
     receptionDateLabel: formatReceptionDateLabel(order.receptionDate ?? null),
     orderDescription: order.notes?.trim() ? order.notes.trim() : null,
@@ -570,6 +576,14 @@ function buildReceiptTotalsBody(
 ): string[][] {
   const m = payload.documentModel;
 
+  const artLbl = portraitSheet
+    ? "Total de artigos"
+    : narrowThermal58
+      ? "Artigos"
+      : "Total de artigos";
+  const artVal = String(payload.articlesTotal);
+  const artRow: [string, string] = [artLbl, artVal];
+
   const subLbl = portraitSheet
     ? "Subtotal (bruto)"
     : narrowThermal58
@@ -590,6 +604,7 @@ function buildReceiptTotalsBody(
         ? "Total"
         : "Total (por forma)";
     return [
+      artRow,
       [subLbl, payload.subtotalFmt],
       [dscLbl, payload.discountFmt],
       [totalLbl, payload.totalFmt],
@@ -604,6 +619,7 @@ function buildReceiptTotalsBody(
         : "Liquidação";
     const payVal = portraitSheet ? pmLong : narrowThermal58 ? pmShort : pmLong;
     return [
+      artRow,
       [subLbl, payload.subtotalFmt],
       [dscLbl, payload.discountFmt],
       ["Total", payload.totalFmt],
@@ -614,6 +630,7 @@ function buildReceiptTotalsBody(
   /* FACTURA_RECIBO */
   return portraitSheet
     ? [
+        artRow,
         [subLbl, payload.subtotalFmt],
         [dscLbl, payload.discountFmt],
         ["Total pago", payload.totalFmt],
@@ -629,6 +646,7 @@ function buildReceiptTotalsBody(
       ]
     : narrowThermal58
       ? [
+          artRow,
           [subLbl, payload.subtotalFmt],
           [dscLbl, payload.discountFmt],
           ["Total", payload.totalFmt],
@@ -641,6 +659,7 @@ function buildReceiptTotalsBody(
             : []),
         ]
       : [
+          artRow,
           [subLbl, payload.subtotalFmt],
           [dscLbl, payload.discountFmt],
           ["Total pago", payload.totalFmt],
@@ -1398,7 +1417,7 @@ async function renderPaymentReceiptDoc(
       /* ── Folha retrato: dados da empresa · referência · cliente (grelha) ── */
       const contentW = pageW - 2 * margin;
       const gap = 6;
-      /* Painel REFERÊNCIA — parte horizontal maior (mais espaço para data/estado/canal). */
+      /* Painel REFERÊNCIA — parte horizontal maior (mais espaço para data/canal). */
       const rightW = Math.min(68, Math.max(48, Math.floor(contentW * 0.34)));
       const leftW = contentW - rightW - gap;
       const xR = margin + leftW + gap;
@@ -1520,31 +1539,21 @@ async function renderPaymentReceiptDoc(
       const lineHeightFactor = Math.max(1.22, Math.min(1.52, 3.98 / fsToMm));
       const refLinePitchMm = fsToMm * lineHeightFactor;
       const gapAfterDateBlock = Math.max(refLinePitchMm * 0.58, 2.08);
-      const showEstado =
-        payload.statusLabel != null && payload.statusLabel.trim() !== "";
-      const estadoLines = showEstado
-        ? doc.splitTextToSize(
-            `Estado: ${payload.statusLabel}`,
-            rightW - 2 * padR,
-          )
-        : [];
       const canalLines = doc.splitTextToSize(
         `Canal: ${payload.originLabel}`,
         rightW - 2 * padR,
       );
-      const estadoLineCount = showEstado ? Math.max(estadoLines.length, 1) : 0;
       const canalLineCount = Math.max(canalLines.length, 1);
       /* jsPDF por vezes desenha ~0,3–0,5 mm por linha acima do nosso pitch em A4. */
       const dateBlockSlackMm =
         (dateLinesCount > 1 ? (dateLinesCount - 1) * 0.4 : 0) +
         (widePortraitSheet ? 0.55 : 0.35);
-      /* Estado / canal: mesmo corpo da data — folga entre blocos. */
-      const estadoCanalDy = refLinePitchMm * (widePortraitSheet ? 1.16 : 1.05);
+      /* Canal: mesmo corpo da data — folga após a data. */
       const refTailMm =
         refLinePitchMm * (widePortraitSheet ? 1.08 : 0.95) +
         (widePortraitSheet ? 2.15 : 1.7) +
-        (estadoLineCount > 1 || canalLineCount > 1
-          ? (estadoLineCount + canalLineCount - 2) * refLinePitchMm * 0.15
+        (canalLineCount > 1
+          ? (canalLineCount - 1) * refLinePitchMm * 0.15
           : 0);
 
       /* Linha «Pedido …» só aparece com número fiscal — incluir no cálculo da caixa. */
@@ -1555,12 +1564,7 @@ async function renderPaymentReceiptDoc(
         yBaselineDateFirst +
         (dateLinesCount - 1) * refLinePitchMm +
         dateBlockSlackMm;
-      const yBaselineEstado = dateBlockBottomBaseline + gapAfterDateBlock;
-      const yBaselineCanal = showEstado
-        ? yBaselineEstado +
-          (estadoLineCount - 1) * refLinePitchMm +
-          estadoCanalDy
-        : yBaselineEstado;
+      const yBaselineCanal = dateBlockBottomBaseline + gapAfterDateBlock;
 
       const refTextBottomY =
         yBaselineCanal +
@@ -1616,13 +1620,6 @@ async function renderPaymentReceiptDoc(
       doc.setTextColor(...inkMuted);
       doc.text(dateShort, xR + padR, yRIn, { lineHeightFactor });
       yRIn = dateBlockBottomBaseline + gapAfterDateBlock;
-      if (showEstado) {
-        doc.text(estadoLines, xR + padR, yRIn, { lineHeightFactor });
-        yRIn =
-          yRIn +
-          (estadoLineCount - 1) * refLinePitchMm +
-          estadoCanalDy;
-      }
       doc.text(canalLines, xR + padR, yRIn, { lineHeightFactor });
 
       y = sepY + (widePortraitSheet ? 11.5 : 10);
@@ -1664,8 +1661,10 @@ async function renderPaymentReceiptDoc(
         startY: y,
         body: [
           ["Nome", payload.clientName ?? "—"],
+          ...(payload.clientNif
+            ? ([["NIF", payload.clientNif]] as string[][])
+            : []),
           ["Telefone", payload.clientPhone ?? "—"],
-          ["E-mail", payload.clientEmail ?? "—"],
         ],
         theme: "plain",
         showHead: "never",
@@ -1921,15 +1920,17 @@ async function renderPaymentReceiptDoc(
       });
       y += 0.6;
       y = labelValue(doc, margin, y, "Nome:", payload.clientName, colW, lvOpts);
-      y = labelValue(
-        doc,
-        margin,
-        y,
-        "E-mail:",
-        payload.clientEmail,
-        colW,
-        lvOpts,
-      );
+      if (payload.clientNif) {
+        y = labelValue(
+          doc,
+          margin,
+          y,
+          "NIF:",
+          payload.clientNif,
+          colW,
+          lvOpts,
+        );
+      }
       y = labelValue(
         doc,
         margin,
@@ -1948,17 +1949,6 @@ async function renderPaymentReceiptDoc(
         colW,
         lvOpts,
       );
-      if (payload.statusLabel) {
-        y = labelValue(
-          doc,
-          margin,
-          y,
-          "Estado:",
-          payload.statusLabel,
-          colW,
-          lvOpts,
-        );
-      }
       y += 0.5;
       bumpThermalMm(y);
     }

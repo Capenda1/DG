@@ -71,7 +71,7 @@ export function ClientAreaShell({ children }: { children: ReactNode }) {
 
   const logout = useCallback(() => {
     void logoutRequest().finally(() => {
-      hardNavigateReplace(ROUTES.login);
+      hardNavigateReplace(ROUTES.clientLogin);
     });
   }, []);
 
@@ -87,7 +87,7 @@ export function ClientAreaShell({ children }: { children: ReactNode }) {
     } catch {
       /* ignore */
     }
-    hardNavigateReplace(ROUTES.login);
+    hardNavigateReplace(ROUTES.clientLogin);
   }, []);
 
   useEffect(() => {
@@ -100,7 +100,7 @@ export function ClientAreaShell({ children }: { children: ReactNode }) {
         method: "POST",
         credentials: "include",
       }).finally(() => {
-        hardNavigateReplace(ROUTES.login);
+        hardNavigateReplace(ROUTES.clientLogin);
       });
     }
     window.addEventListener(SESSION_INVALIDATED_EVENT, onSessionInvalidated);

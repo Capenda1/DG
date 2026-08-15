@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { AuditAction, UserRole } from '@prisma/client';
+import { AuditAction, ClientType, UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { createHash, randomBytes, randomInt } from 'crypto';
 import { normalizeEmail } from '../../common/email.util';
@@ -20,6 +20,7 @@ import type { BootstrapAdminDto } from './dto/bootstrap-admin.dto';
 import type { CreateUserDto } from './dto/create-user.dto';
 import type { ForgotPasswordDto } from './dto/forgot-password.dto';
 import type { LoginDto } from './dto/login.dto';
+import type { RegisterClientDto } from './dto/register-client.dto';
 import type { RefreshDto } from './dto/refresh.dto';
 import type { ResetPasswordDto } from './dto/reset-password.dto';
 import type { VerifyResetCodeDto } from './dto/verify-reset-code.dto';
@@ -164,11 +165,24 @@ export class AuthService {
     userAgent?: string,
   ) {
     const isCollaborator = dto.role === UserRole.COLLABORATOR;
-    const email = isCollaborator
-      ? dto.email?.trim()
-        ? await this.users.assertEmailAvailable(dto.email)
-        : `colab.${randomBytes(8).toString('hex')}@interno.local`
-      : await this.users.assertEmailAvailable(dto.email!);
+    const isClient = dto.role === UserRole.CLIENT;
+    const email = isClient
+      ? `cliente.${randomBytes(8).toString('hex')}@cliente.local`
+      : isCollaborator
+        ? dto.email?.trim()
+          ? await this.users.assertEmailAvailable(dto.email)
+          : `colab.${randomBytes(8).toString('hex')}@interno.local`
+        : await this.users.assertEmailAvailable(dto.email!);
+    const phone = isClient
+      ? await this.users.assertClientPhoneAvailable(dto.phone ?? '')
+      : dto.phone;
+    const clientType = isClient
+      ? dto.isCompany
+        ? ClientType.COMPANY
+        : ClientType.INDIVIDUAL
+      : null;
+    const nif =
+      isClient && dto.isCompany ? (dto.nif?.trim() ?? null) : null;
 
     const plainPassword = isCollaborator
       ? randomBytes(24).toString('base64url')
@@ -180,7 +194,9 @@ export class AuthService {
       name: dto.name,
       passwordHash,
       role: dto.role,
-      phone: dto.phone,
+      phone,
+      clientType,
+      nif,
     });
     await this.prisma.auditLog.create({
       data: {
@@ -190,12 +206,52 @@ export class AuthService {
         userId: actorAdminId,
         payload: {
           createdRole: dto.role,
+          ...(isClient ? { clientType } : {}),
           ip,
           userAgent,
         },
       },
     });
     return { user };
+  }
+
+  /**
+   * Auto-cadastro público: cria exclusivamente contas de cliente e inicia
+   * imediatamente uma sessão. O papel e o email interno nunca vêm do pedido.
+   */
+  async registerClient(
+    dto: RegisterClientDto,
+    ip?: string,
+    userAgent?: string,
+  ) {
+    const phone = await this.users.assertClientPhoneAvailable(dto.phone);
+    const passwordHash = await bcrypt.hash(dto.password, 10);
+    const user = await this.users.create({
+      email: `cliente.${randomBytes(16).toString('hex')}@cliente.local`,
+      name: dto.name.trim(),
+      passwordHash,
+      role: UserRole.CLIENT,
+      phone,
+      clientType: dto.isCompany ? ClientType.COMPANY : ClientType.INDIVIDUAL,
+      nif: dto.isCompany ? dto.nif?.trim() : null,
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        entityType: 'User',
+        entityId: user.id,
+        action: AuditAction.CREATE,
+        userId: user.id,
+        payload: {
+          selfRegistration: true,
+          clientType: dto.isCompany ? ClientType.COMPANY : ClientType.INDIVIDUAL,
+          ip,
+          userAgent,
+        },
+      },
+    });
+
+    return this.issueSessionAfterAuth(user, ip, userAgent);
   }
 
   async updateUserByAdmin(
@@ -209,7 +265,10 @@ export class AuthService {
       dto.email !== undefined ||
       dto.name !== undefined ||
       dto.role !== undefined ||
-      dto.phone !== undefined;
+      dto.phone !== undefined ||
+      dto.isCompany !== undefined ||
+      dto.nif !== undefined ||
+      dto.active !== undefined;
     if (!hasUpdate) {
       throw new BadRequestException('Nenhum campo para atualizar.');
     }
@@ -243,6 +302,9 @@ export class AuthService {
       name?: string;
       role?: UserRole;
       phone?: string | null;
+      clientType?: ClientType | null;
+      nif?: string | null;
+      active?: boolean;
     } = {};
     if (dto.email !== undefined) {
       data.email = normalizeEmail(dto.email);
@@ -253,8 +315,60 @@ export class AuthService {
     if (dto.role !== undefined) {
       data.role = dto.role;
     }
-    if (dto.phone !== undefined) {
+    const resultingRole = dto.role ?? current.role;
+    if (
+      resultingRole === UserRole.CLIENT &&
+      (dto.phone !== undefined || dto.role === UserRole.CLIENT)
+    ) {
+      data.phone = await this.users.assertClientPhoneAvailable(
+        dto.phone ?? current.phone ?? '',
+        targetId,
+      );
+    } else if (dto.phone !== undefined) {
       data.phone = dto.phone.trim() ? dto.phone.trim() : null;
+    }
+
+    if (resultingRole === UserRole.CLIENT) {
+      if (dto.isCompany !== undefined) {
+        data.clientType = dto.isCompany
+          ? ClientType.COMPANY
+          : ClientType.INDIVIDUAL;
+        if (!dto.isCompany) {
+          data.nif = null;
+        }
+      }
+      const willBeCompany =
+        dto.isCompany === true ||
+        (dto.isCompany === undefined &&
+          current.clientType === ClientType.COMPANY);
+      if (willBeCompany) {
+        const nextNif =
+          dto.nif !== undefined ? dto.nif.trim() : (current.nif ?? '');
+        if (!nextNif) {
+          throw new BadRequestException(
+            'O NIF é obrigatório para contas de empresa.',
+          );
+        }
+        if (dto.nif !== undefined || dto.isCompany === true) {
+          data.nif = nextNif;
+        }
+      }
+      if (dto.active !== undefined) {
+        data.active = dto.active;
+      }
+    } else if (
+      dto.role !== undefined ||
+      dto.isCompany !== undefined ||
+      dto.nif !== undefined
+    ) {
+      data.clientType = null;
+      data.nif = null;
+    }
+
+    if (dto.active !== undefined && resultingRole !== UserRole.CLIENT) {
+      throw new BadRequestException(
+        'A activação/desactivação aplica-se apenas a contas de cliente.',
+      );
     }
 
     const user = await this.prisma.user.update({
@@ -267,9 +381,19 @@ export class AuthService {
         role: true,
         mfaEnabled: true,
         phone: true,
+        clientType: true,
+        nif: true,
+        active: true,
         createdAt: true,
       },
     });
+
+    if (dto.active === false && resultingRole === UserRole.CLIENT) {
+      await this.prisma.userSession.updateMany({
+        where: { userId: targetId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+    }
 
     await this.prisma.auditLog.create({
       data: {
@@ -340,13 +464,30 @@ export class AuthService {
   }
 
   async login(dto: LoginDto, ip?: string, userAgent?: string) {
-    const full = await this.users.findByEmail(normalizeEmail(dto.email));
+    const email = dto.email?.trim();
+    const phone = dto.phone?.trim();
+    if ((!email && !phone) || (email && phone)) {
+      throw new UnauthorizedException('Credenciais inválidas.');
+    }
+
+    const full = email
+      ? await this.users.findByEmail(normalizeEmail(email))
+      : await this.users.findClientByPhone(phone!);
     if (!full) {
+      throw new UnauthorizedException('Credenciais inválidas.');
+    }
+    /* Clientes entram exclusivamente por telefone; email é reservado ao staff. */
+    if (email && full.role === UserRole.CLIENT) {
       throw new UnauthorizedException('Credenciais inválidas.');
     }
     if (full.role === UserRole.COLLABORATOR) {
       throw new UnauthorizedException(
         'Esta conta é apenas para registo interno (RH). Não tem acesso ao sistema.',
+      );
+    }
+    if (full.active === false) {
+      throw new UnauthorizedException(
+        'Esta conta está desactivada. Contacte a Dádiva para reactivar o acesso.',
       );
     }
     const ok = await bcrypt.compare(dto.password, full.passwordHash);
@@ -514,11 +655,19 @@ export class AuthService {
       role: UserRole;
       mfaEnabled: boolean;
       phone: string | null;
+      clientType?: ClientType | null;
+      nif?: string | null;
+      active?: boolean;
       createdAt: Date;
     },
     ip?: string,
     userAgent?: string,
   ) {
+    if (full.active === false) {
+      throw new UnauthorizedException(
+        'Esta conta está desactivada. Contacte a Dádiva para reactivar o acesso.',
+      );
+    }
     await this.prisma.auditLog.create({
       data: {
         entityType: 'User',
@@ -547,6 +696,9 @@ export class AuthService {
         role: full.role,
         mfaEnabled: full.mfaEnabled,
         phone: full.phone,
+        clientType: full.clientType ?? null,
+        nif: full.nif ?? null,
+        active: full.active ?? true,
         createdAt: full.createdAt,
       },
       accessToken,
@@ -632,6 +784,9 @@ export class AuthService {
     });
     if (!session) {
       throw new UnauthorizedException('Sessão inválida ou expirada.');
+    }
+    if (session.user.active === false) {
+      throw new UnauthorizedException('Conta desactivada.');
     }
 
     await this.prisma.userSession.update({

@@ -35,24 +35,6 @@ export default () => ({
       10,
     ),
   },
-  /** Opcional — melhoramento de imagem com IA (Real-ESRGAN via replicate.com). */
-  replicate: {
-    apiToken: process.env.REPLICATE_API_TOKEN ?? '',
-  },
-  /** Upscayl Cloud — https://upscayl.org/account/api-keys (chave cabeçalho X-API-Key). */
-  upscayl: {
-    apiKey: process.env.UPSCAYL_API_KEY ?? '',
-    apiBaseUrl: process.env.UPSCAYL_API_BASE_URL ?? 'https://api.upscayl.org',
-  },
-  /**
-   * Qual motor IA usar quando existir mais que um configurado: replicate | upscayl | auto.
-   * `auto`: prioriza REPLICATE_API_TOKEN se existir, senão UPSCAYL_API_KEY.
-   */
-  imageEnhance: {
-    provider: (process.env.IMAGE_ENHANCE_PROVIDER ?? 'auto')
-      .trim()
-      .toLowerCase(),
-  },
   /** URL pública do frontend (links de recuperação de palavra-passe). */
   appPublicUrl: (process.env.APP_PUBLIC_URL ?? process.env.CORS_ORIGIN ?? 'http://localhost:3000')
     .split(',')[0]

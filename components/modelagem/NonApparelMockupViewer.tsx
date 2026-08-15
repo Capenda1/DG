@@ -34,10 +34,12 @@ import type {
 } from "@/components/modelagem/MockupViewer2D";
 import {
   angleDeg,
+  canvasBufferSize,
   clamp01,
   clampScale,
   DESKTOP_HIT_MIN_PX,
   dist,
+  getCanvasDpr,
   midpoint,
   normalizeRotation,
   TOUCH_HIT_MIN_PX,
@@ -67,9 +69,9 @@ export type NonApparelMockupViewerProps = {
   touchFriendly?: boolean;
 };
 
-type CanvasSize = { w: number; h: number };
+type CanvasSize = { w: number; h: number; dpr: number };
 
-function layerBounds(layer: DraggableLayer, W: number, H: number, hitMinPx: number) {
+function layerBounds(layer: DraggableLayer, W: number, H: number, hitMinPx: number, dpr = 1) {
   const { artSize, artX, artY, artScale } = artLayout(W, H);
   const cx = artX + layer.x * artSize;
   const cy = artY + layer.y * artSize;
@@ -79,12 +81,12 @@ function layerBounds(layer: DraggableLayer, W: number, H: number, hitMinPx: numb
     const lines = (layer.text ?? "T").split("\n");
     const maxLen = Math.max(...lines.map((l) => l.length), 1);
     const fs = (layer.fontSize ?? 40) * layer.scale * artScale;
-    hw = fs * maxLen * 0.32 + 12;
-    hh = fs * lines.length * 0.64 + 12;
+    hw = fs * maxLen * 0.32 + 12 * dpr;
+    hh = fs * lines.length * 0.64 + 12 * dpr;
   } else {
     const dw = (layer.widthRel ?? 0.4) * ART_CANVAS_SIZE * layer.scale * artScale;
-    hw = dw / 2 + 10;
-    hh = dw / (layer.aspect ?? 1) / 2 + 10;
+    hw = dw / 2 + 10 * dpr;
+    hh = dw / (layer.aspect ?? 1) / 2 + 10 * dpr;
   }
   const halfMin = hitMinPx / 2;
   return { cx, cy, hw: Math.max(hw, halfMin), hh: Math.max(hh, halfMin) };
@@ -97,10 +99,11 @@ function hitTest(
   W: number,
   H: number,
   hitMinPx: number,
+  dpr = 1,
 ): string | null {
   const sorted = [...layers].sort((a, b) => b.zIndex - a.zIndex);
   for (const layer of sorted) {
-    const { cx: lx, cy: ly, hw, hh } = layerBounds(layer, W, H, hitMinPx);
+    const { cx: lx, cy: ly, hw, hh } = layerBounds(layer, W, H, hitMinPx, dpr);
     const angle = -(layer.rotationDeg * Math.PI) / 180;
     const dx = cx - lx;
     const dy = cy - ly;
@@ -133,6 +136,8 @@ function paintFrame(
     artCanvas: HTMLCanvasElement | null;
   },
 ): void {
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
   ctx.clearRect(0, 0, W, H);
   drawStudioBackground(ctx, W, H);
 
@@ -176,7 +181,9 @@ export const NonApparelMockupViewer = forwardRef<
   const containerRef = useRef<HTMLDivElement>(null);
   const outRef = useRef<HTMLCanvasElement>(null);
   const hlRef = useRef<HTMLCanvasElement>(null);
-  const [canvasSize, setCanvasSize] = useState<CanvasSize>({ w: 800, h: 600 });
+  const [canvasSize, setCanvasSize] = useState<CanvasSize>(() => ({
+    ...canvasBufferSize(800, 600),
+  }));
   const [mugImage, setMugImage] = useState<HTMLImageElement | null>(null);
   const [tintedMug, setTintedMug] = useState<HTMLCanvasElement | null>(null);
   const tintedMugRef = useRef<HTMLCanvasElement | null>(null);
@@ -185,9 +192,12 @@ export const NonApparelMockupViewer = forwardRef<
   const gestureRef = useRef<ActiveGesture | null>(null);
   const pointersRef = useRef(new Map<number, Point>());
   const layersRef = useRef<DraggableLayer[]>([]);
-  const hitMinPx = touchFriendly ? TOUCH_HIT_MIN_PX : DESKTOP_HIT_MIN_PX;
+  const hitMinPx =
+    (touchFriendly ? TOUCH_HIT_MIN_PX : DESKTOP_HIT_MIN_PX) * canvasSize.dpr;
   const hitMinRef = useRef(hitMinPx);
   hitMinRef.current = hitMinPx;
+  const dprRef = useRef(canvasSize.dpr);
+  dprRef.current = canvasSize.dpr;
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
@@ -254,13 +264,30 @@ export const NonApparelMockupViewer = forwardRef<
   useLayoutEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => {
-      const w = Math.max(320, Math.round(el.clientWidth));
-      const h = Math.max(240, Math.round(el.clientHeight));
-      setCanvasSize({ w, h });
-    });
+
+    const applySize = () => {
+      const cssW = Math.max(320, Math.round(el.clientWidth));
+      const cssH = Math.max(240, Math.round(el.clientHeight));
+      const next = canvasBufferSize(cssW, cssH);
+      setCanvasSize((prev) =>
+        prev.w === next.w && prev.h === next.h && prev.dpr === next.dpr
+          ? prev
+          : next,
+      );
+    };
+
+    const ro = new ResizeObserver(applySize);
     ro.observe(el);
-    return () => ro.disconnect();
+    applySize();
+
+    const onDprChange = () => applySize();
+    const dprMq = window.matchMedia(`(resolution: ${getCanvasDpr()}dppx)`);
+    dprMq.addEventListener?.("change", onDprChange);
+
+    return () => {
+      ro.disconnect();
+      dprMq.removeEventListener?.("change", onDprChange);
+    };
   }, []);
 
   useEffect(() => {
@@ -295,8 +322,9 @@ export const NonApparelMockupViewer = forwardRef<
     c2d.clearRect(0, 0, W, H);
 
     function drawHandle(layer: DraggableLayer, isSelected: boolean, dragging: boolean) {
-      const { cx, cy, hw, hh } = layerBounds(layer, W, H, hitMinPx);
+      const { cx, cy, hw, hh } = layerBounds(layer, W, H, hitMinPx, canvasSize.dpr);
       const angle = (layer.rotationDeg * Math.PI) / 180;
+      const dpr = canvasSize.dpr;
       c2d.save();
       c2d.translate(cx, cy);
       c2d.rotate(angle);
@@ -306,8 +334,8 @@ export const NonApparelMockupViewer = forwardRef<
           ? "rgba(52,211,153,.95)"
           : "rgba(99,210,250,.75)";
       c2d.strokeStyle = color;
-      c2d.lineWidth = isSelected ? 1.8 : 1.4;
-      c2d.setLineDash(isSelected ? [6, 3] : [4, 3]);
+      c2d.lineWidth = (isSelected ? 1.8 : 1.4) * dpr;
+      c2d.setLineDash(isSelected ? [6 * dpr, 3 * dpr] : [4 * dpr, 3 * dpr]);
       c2d.strokeRect(-hw, -hh, hw * 2, hh * 2);
       c2d.setLineDash([]);
       c2d.restore();
@@ -371,8 +399,8 @@ export const NonApparelMockupViewer = forwardRef<
         const targetId =
           g?.id ??
           selectedId ??
-          hitTest(midpoint(pA, pB).x, midpoint(pA, pB).y, arr, W, H, hitMinRef.current) ??
-          hitTest(pos.x, pos.y, arr, W, H, hitMinRef.current);
+          hitTest(midpoint(pA, pB).x, midpoint(pA, pB).y, arr, W, H, hitMinRef.current, dprRef.current) ??
+          hitTest(pos.x, pos.y, arr, W, H, hitMinRef.current, dprRef.current);
         if (targetId) {
           const layer = arr.find((l) => l.id === targetId);
           if (layer && !layer.locked) {
@@ -382,7 +410,7 @@ export const NonApparelMockupViewer = forwardRef<
         }
       }
 
-      const id = hitTest(pos.x, pos.y, arr, W, H, hitMinRef.current);
+      const id = hitTest(pos.x, pos.y, arr, W, H, hitMinRef.current, dprRef.current);
       if (!id) {
         setHoveredId(null);
         return;
@@ -423,7 +451,7 @@ export const NonApparelMockupViewer = forwardRef<
       const g = gestureRef.current;
       if (!g) {
         const arr = layersRef.current;
-        setHoveredId(arr.length ? hitTest(pos.x, pos.y, arr, W, H, hitMinRef.current) : null);
+        setHoveredId(arr.length ? hitTest(pos.x, pos.y, arr, W, H, hitMinRef.current, dprRef.current) : null);
         return;
       }
 
@@ -534,7 +562,7 @@ export const NonApparelMockupViewer = forwardRef<
         const W = e.currentTarget.width;
         const H = e.currentTarget.height;
         const arr = layersRef.current;
-        setHoveredId(arr.length ? hitTest(pos.x, pos.y, arr, W, H, hitMinRef.current) : null);
+        setHoveredId(arr.length ? hitTest(pos.x, pos.y, arr, W, H, hitMinRef.current, dprRef.current) : null);
         if (!moved) onSelectLayer?.(id);
         return;
       }
@@ -585,33 +613,39 @@ export const NonApparelMockupViewer = forwardRef<
         />
       ) : null}
 
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-10 bg-gradient-to-b from-[#03050a]/90 via-[#03050a]/40 to-transparent px-4 pb-14 pt-3">
-        <div className="flex items-center justify-between gap-2">
-          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/[0.13] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-emerald-300/80 ring-1 ring-emerald-400/20">
-            <span className="relative flex h-1.5 w-1.5 shrink-0">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-40" />
-              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
+      {touchFriendly ? null : (
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-10 bg-gradient-to-b from-[#03050a]/90 via-[#03050a]/40 to-transparent px-4 pb-14 pt-3">
+          <div className="flex items-center justify-between gap-2">
+            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/[0.13] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-emerald-300/80 ring-1 ring-emerald-400/20">
+              <span className="relative flex h-1.5 w-1.5 shrink-0">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-40" />
+                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
+              </span>
+              Ao vivo
             </span>
-            Ao vivo
-          </span>
-          {selectedLayerLabel && (kind === "MUG" || kind === "FLAT") ? (
-            <span className="truncate text-[10px] font-medium text-amber-300/85">
-              {selectedLayerLabel}
+            {selectedLayerLabel && (kind === "MUG" || kind === "FLAT") ? (
+              <span className="truncate text-[10px] font-medium text-amber-300/85">
+                {selectedLayerLabel}
+              </span>
+            ) : null}
+            <span className="inline-flex items-center gap-1 rounded-full bg-indigo-500/[0.13] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-indigo-300/80 ring-1 ring-indigo-400/20">
+              {kind === "MUG" ? "Caneca" : "Impressão plana"}
             </span>
-          ) : null}
-          <span className="inline-flex items-center gap-1 rounded-full bg-indigo-500/[0.13] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-indigo-300/80 ring-1 ring-indigo-400/20">
-            {kind === "MUG" ? "Caneca" : "Impressão plana"}
-          </span>
-          {caption ? (
-            <span className="hidden truncate text-[10px] text-zinc-400 sm:inline">
-              {caption}
-            </span>
-          ) : null}
+            {caption ? (
+              <span className="hidden truncate text-[10px] text-zinc-400 sm:inline">
+                {caption}
+              </span>
+            ) : null}
+          </div>
         </div>
-      </div>
+      )}
 
       {kind === "FLAT" && onSideChange ? (
-        <div className="pointer-events-auto absolute bottom-16 left-1/2 z-20 flex -translate-x-1/2 gap-1 rounded-full border border-white/10 bg-zinc-950/75 p-1 backdrop-blur-md">
+        <div
+          className={`pointer-events-auto absolute left-1/2 z-20 flex -translate-x-1/2 gap-1 rounded-full border border-white/10 bg-zinc-950/75 p-1 backdrop-blur-md ${
+            touchFriendly ? "bottom-2" : "bottom-16"
+          }`}
+        >
           {(["front", "back"] as const).map((s) => (
             <button
               key={s}

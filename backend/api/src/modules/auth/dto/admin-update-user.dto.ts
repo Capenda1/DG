@@ -1,11 +1,14 @@
 import { UserRole } from '@prisma/client';
 import {
+  IsBoolean,
   IsEmail,
   IsEnum,
   IsOptional,
   IsString,
+  Matches,
   MaxLength,
   MinLength,
+  ValidateIf,
 } from 'class-validator';
 import { NormalizeEmailField } from '../../../common/email-transform.decorator';
 
@@ -30,4 +33,19 @@ export class AdminUpdateUserDto {
   @IsString()
   @MaxLength(32)
   phone?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isCompany?: boolean;
+
+  @ValidateIf((o: AdminUpdateUserDto) => o.isCompany === true)
+  @IsString()
+  @MaxLength(32)
+  @Matches(/\S/, { message: 'O NIF é obrigatório para contas de empresa.' })
+  nif?: string;
+
+  /** Apenas contas CLIENT — true activa, false desactiva o acesso. */
+  @IsOptional()
+  @IsBoolean()
+  active?: boolean;
 }

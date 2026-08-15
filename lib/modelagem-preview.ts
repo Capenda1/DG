@@ -2,6 +2,8 @@
  * Resolução do tipo de mockup 2D (vestuário, caneca, impressão plana).
  */
 import {
+  APPAREL_PRODUCT_TYPES,
+  apparelPreviewColorFromOrderMeta,
   previewAppearanceFromProductName,
   type ApparelProductType,
 } from "@/lib/apparel-catalog";
@@ -170,11 +172,24 @@ export function resolveModelagemPreviewFromOrder(
   }
 
   const fromGarment = garmentTypeFromItem(item);
-  if (fromGarment) {
-    const apparel = previewAppearanceFromProductName(item?.productName ?? "");
-    return { ...apparel, productType: fromGarment, kind: "APPAREL" };
-  }
+  const fromName = previewAppearanceFromProductName(item?.productName ?? "");
+  const fromMeta = apparelPreviewColorFromOrderMeta(meta);
+  const productType = fromGarment ?? fromName.productType;
+  const typeLbl =
+    APPAREL_PRODUCT_TYPES.find((t) => t.id === productType)?.label ??
+    (fromName.caption.split(" · ")[0] || "Peça");
 
-  const apparel = previewAppearanceFromProductName(item?.productName ?? "");
-  return { ...apparel, kind: "APPAREL" };
+  /* Preferir cor dos metadados (baseColor/colorId); productName só como fallback. */
+  const baseColorHex = fromMeta.colorId ? fromMeta.hex : fromName.baseColorHex;
+  const caption = fromMeta.label
+    ? `${typeLbl} · ${fromMeta.label}`
+    : fromName.caption;
+
+  return {
+    kind: "APPAREL",
+    productType,
+    baseColorHex,
+    caption,
+    productCode: productCode || undefined,
+  };
 }

@@ -9,8 +9,14 @@ import { NormalizeEmailField } from '../../../common/email-transform.decorator';
 
 export class LoginDto {
   @NormalizeEmailField()
+  @IsOptional()
   @IsEmail()
-  email!: string;
+  email?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(32)
+  phone?: string;
 
   @IsString()
   @MinLength(1)

@@ -9,7 +9,6 @@ import {
   normalizeUserRole,
   pathnameAllowedForAttendantRole,
   pathnameAllowedForDesignerRole,
-  postLoginPath,
   ROUTES,
 } from "./routes";
 
@@ -27,7 +26,13 @@ function isStaffModelagemRoute(pathname: string): boolean {
 
 export function isPublicAuthPath(pathname: string): boolean {
   const p = normalizeAppPathname(pathname);
-  return p === ROUTES.login || p.startsWith("/login/");
+  return (
+    p === ROUTES.clientLogin ||
+    p === ROUTES.clientRegister ||
+    p === ROUTES.login ||
+    p.startsWith("/login/") ||
+    p === ROUTES.admin.login
+  );
 }
 
 export function readAccessToken(request: NextRequest): string | null {
@@ -67,10 +72,6 @@ export function resolveProtectedRedirect(
   const role = normalizeUserRole(claims.role);
   const p = normalizeAppPathname(pathname);
 
-  if (p === ROUTES.home) {
-    return postLoginPath(role);
-  }
-
   if (p === ROUTES.admin.root || p.startsWith(`${ROUTES.admin.root}/`)) {
     if (!isStaffRole(role)) {
       return ROUTES.account;
@@ -98,7 +99,7 @@ export function resolveProtectedRedirect(
     if (isStaffRole(role)) {
       return adminHomePathForRole(role);
     }
-    return ROUTES.login;
+    return ROUTES.clientLogin;
   }
 
   return null;

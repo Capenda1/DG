@@ -792,17 +792,6 @@ export function AdminDesignerTools() {
               </p>
             </Link>
             <Link
-              href={ROUTES.admin.restaurarImagem}
-              className="group rounded-2xl border border-white/[0.07] bg-black/25 p-4 ring-1 ring-white/[0.03] transition hover:border-sky-400/25 hover:bg-sky-950/20"
-            >
-              <p className="text-sm font-semibold text-zinc-100">
-                Restaurar imagem
-              </p>
-              <p className="mt-1 text-[11px] leading-snug text-zinc-500">
-                Ferramenta de apoio ao cliente e à arte.
-              </p>
-            </Link>
-            <Link
               href={ROUTES.admin.pedidos}
               className="group rounded-2xl border border-white/[0.07] bg-black/25 p-4 ring-1 ring-white/[0.03] transition hover:border-amber-400/25 hover:bg-amber-950/15 sm:col-span-2 lg:col-span-1"
             >

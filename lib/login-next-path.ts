@@ -8,5 +8,6 @@ export function sanitizeLoginNextPath(
   const path = next.trim();
   if (!path.startsWith("/") || path.startsWith("//")) return null;
   if (path.startsWith("/login")) return null;
+  if (path === "/admin/login" || path.startsWith("/admin/login/")) return null;
   return path;
 }

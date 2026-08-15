@@ -114,7 +114,12 @@ export class FinanceService {
         where: { status: PdvCashSessionStatus.OPEN },
         select: { id: true },
       });
-      pdvSessionId = open?.id ?? null;
+      if (!open) {
+        throw new BadRequestException(
+          'Abre um turno de caixa antes de registar um pagamento do balcão.',
+        );
+      }
+      pdvSessionId = open.id;
     }
 
     const cur = params.currency.trim().slice(0, 3).toUpperCase() || 'AOA';
@@ -137,6 +142,148 @@ export class FinanceService {
         },
       },
     });
+  }
+
+  /**
+   * Cria uma linha compensatória append-only. O saldo líquido do pedido passa
+   * a zero sem apagar nem alterar o lançamento original.
+   */
+  async reverseOrderPaymentForCancellation(
+    tx: Prisma.TransactionClient,
+    params: {
+      orderId: string;
+      orderNumber: string;
+      actorId: string;
+      reason: string;
+    },
+  ): Promise<number> {
+    const entries = await tx.financialLedgerEntry.findMany({
+      where: {
+        orderId: params.orderId,
+        entryType: FinancialLedgerEntryType.SALE_PAYMENT,
+      },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        amount: true,
+        currency: true,
+        metadata: true,
+      },
+    });
+    const net = roundMoney(
+      entries.reduce((sum, entry) => sum + Number(entry.amount), 0),
+    );
+    if (net <= 0) return 0;
+
+    const source = entries.find((entry) => Number(entry.amount) > 0);
+    const metadata =
+      source?.metadata &&
+      typeof source.metadata === 'object' &&
+      !Array.isArray(source.metadata)
+        ? (source.metadata as Record<string, unknown>)
+        : {};
+    const paymentMethod = ledgerMetaScalar(metadata.paymentMethod);
+    const orderOrigin = ledgerMetaScalar(metadata.orderOrigin);
+    let pdvSessionId: string | null = null;
+    if (
+      orderOrigin === OrderOrigin.BALCAO &&
+      paymentMethod === PaymentMethod.PDV_CASH
+    ) {
+      const open = await tx.pdvCashSession.findFirst({
+        where: { status: PdvCashSessionStatus.OPEN },
+        select: { id: true },
+      });
+      if (!open) {
+        throw new BadRequestException(
+          'Abre um turno de caixa antes de estornar um pagamento em dinheiro do balcão.',
+        );
+      }
+      pdvSessionId = open.id;
+    }
+
+    await tx.financialLedgerEntry.create({
+      data: {
+        entryType: FinancialLedgerEntryType.SALE_PAYMENT,
+        amount: new Prisma.Decimal(-net),
+        currency: source?.currency ?? 'AOA',
+        orderId: params.orderId,
+        userId: params.actorId,
+        pdvSessionId,
+        reference: params.orderNumber.slice(0, 64),
+        metadata: {
+          ...metadata,
+          operation: 'ORDER_CANCELLATION_REVERSAL',
+          cancellationReason: params.reason,
+        },
+      },
+    });
+    return net;
+  }
+
+  /** Compensa o estorno quando o administrador reabre o pedido. */
+  async reactivateOrderPaymentForReopen(
+    tx: Prisma.TransactionClient,
+    params: {
+      orderId: string;
+      orderNumber: string;
+      actorId: string;
+    },
+  ): Promise<number> {
+    const entries = await tx.financialLedgerEntry.findMany({
+      where: {
+        orderId: params.orderId,
+        entryType: FinancialLedgerEntryType.SALE_PAYMENT,
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { amount: true, currency: true, metadata: true },
+    });
+    const net = roundMoney(
+      entries.reduce((sum, entry) => sum + Number(entry.amount), 0),
+    );
+    if (net >= 0) return 0;
+
+    const source = entries.find((entry) => Number(entry.amount) > 0);
+    const metadata =
+      source?.metadata &&
+      typeof source.metadata === 'object' &&
+      !Array.isArray(source.metadata)
+        ? (source.metadata as Record<string, unknown>)
+        : {};
+    const paymentMethod = ledgerMetaScalar(metadata.paymentMethod);
+    const orderOrigin = ledgerMetaScalar(metadata.orderOrigin);
+    let pdvSessionId: string | null = null;
+    if (
+      orderOrigin === OrderOrigin.BALCAO &&
+      paymentMethod === PaymentMethod.PDV_CASH
+    ) {
+      const open = await tx.pdvCashSession.findFirst({
+        where: { status: PdvCashSessionStatus.OPEN },
+        select: { id: true },
+      });
+      if (!open) {
+        throw new BadRequestException(
+          'Abre um turno de caixa antes de reactivar um pagamento em dinheiro do balcão.',
+        );
+      }
+      pdvSessionId = open.id;
+    }
+
+    const amount = Math.abs(net);
+    await tx.financialLedgerEntry.create({
+      data: {
+        entryType: FinancialLedgerEntryType.SALE_PAYMENT,
+        amount: new Prisma.Decimal(amount),
+        currency: source?.currency ?? 'AOA',
+        orderId: params.orderId,
+        userId: params.actorId,
+        pdvSessionId,
+        reference: params.orderNumber.slice(0, 64),
+        metadata: {
+          ...metadata,
+          operation: 'ORDER_REOPEN_REACTIVATION',
+        },
+      },
+    });
+    return amount;
   }
 
   ensureBalcaoCashSessionIsOpen(): Promise<void> {
@@ -241,7 +388,9 @@ export class FinanceService {
       opening + cashSales + supplementsTotal - withdrawalsTotalAbs,
     );
     const saleCount = ledgerRows.filter(
-      (r) => r.entryType === FinancialLedgerEntryType.SALE_PAYMENT,
+      (r) =>
+        r.entryType === FinancialLedgerEntryType.SALE_PAYMENT &&
+        Number(r.amount) > 0,
     ).length;
 
     return {
@@ -629,13 +778,16 @@ export class FinanceService {
 
     const balcaoRevenue = byOrigin[OrderOrigin.BALCAO] ?? 0;
     const onlineRevenue = byOrigin[OrderOrigin.ONLINE] ?? 0;
+    const positiveSaleCount = entries.filter(
+      (entry) => Number(entry.amount) > 0,
+    ).length;
     const avgTicket =
-      entries.length > 0 ? roundMoney(total / entries.length) : 0;
+      positiveSaleCount > 0 ? roundMoney(total / positiveSaleCount) : 0;
 
     return {
       from: from.toISOString(),
       to: to.toISOString(),
-      entryCount: entries.length,
+      entryCount: positiveSaleCount,
       totalRevenue: roundMoney(total),
       currency: entries[0]?.currency ?? 'AOA',
       balcaoRevenue: roundMoney(balcaoRevenue),
@@ -946,6 +1098,14 @@ export class FinanceService {
         const pedido = entry.reference?.trim() || '—';
         const origin = this.orderOriginHumanLabel(meta?.orderOrigin);
         const pm = this.paymentMethodHumanLabelPm(meta?.paymentMethod);
+        const operation = ledgerMetaScalar(meta?.operation);
+        if (operation === 'ORDER_CANCELLATION_REVERSAL') {
+          const reason = ledgerMetaScalar(meta?.cancellationReason).trim();
+          return `Estorno · Pedido ${pedido}${reason ? ` · ${reason}` : ''}`;
+        }
+        if (operation === 'ORDER_REOPEN_REACTIVATION') {
+          return `Reactivação após reabertura · Pedido ${pedido}`;
+        }
         return `${origin} · ${pm} · Pedido ${pedido}`;
       }
       case FinancialLedgerEntryType.PDV_SUPPLEMENT: {
@@ -1019,6 +1179,8 @@ export class FinanceService {
 
     switch (e.entryType) {
       case FinancialLedgerEntryType.SALE_PAYMENT:
+        direction = Number(e.amount) >= 0 ? 'IN' : 'OUT';
+        break;
       case FinancialLedgerEntryType.PDV_SUPPLEMENT:
       case FinancialLedgerEntryType.CASH_RECEIPT_OTHER:
         direction = 'IN';

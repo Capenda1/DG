@@ -581,7 +581,63 @@ export function buildApparelProductDescription(
 
 const DEFAULT_PREVIEW_HEX = "#c8cdd4";
 
-/** Infere tipo de peça e cor a partir de `productName` (formato `buildApparelProductDescription`). */
+/** Resolve id de cor do catálogo a partir de metadados / `baseColor` da variante. */
+export function resolveApparelColorIdFromMeta(
+  meta: Record<string, unknown> | null | undefined,
+  baseColorFallback?: string | null,
+): ApparelColorId | null {
+  const candidates: string[] = [];
+  if (meta) {
+    for (const key of ["colorId", "baseColor"] as const) {
+      const v = meta[key];
+      if (typeof v === "string" && v.trim()) candidates.push(v.trim());
+    }
+  }
+  if (baseColorFallback?.trim()) candidates.push(baseColorFallback.trim());
+
+  for (const raw of candidates) {
+    const lower = raw.toLowerCase();
+    const byId = APPAREL_COLORS.find((c) => c.id.toLowerCase() === lower);
+    if (byId) return byId.id;
+    const byLabel = APPAREL_COLORS.find(
+      (c) => c.label.toLowerCase() === lower,
+    );
+    if (byLabel) return byLabel.id;
+  }
+  return null;
+}
+
+export function apparelColorPreviewHex(
+  colorId: ApparelColorId | null | undefined,
+): string {
+  if (!colorId) return DEFAULT_PREVIEW_HEX;
+  return APPAREL_COLOR_PREVIEW_HEX[colorId] ?? DEFAULT_PREVIEW_HEX;
+}
+
+/**
+ * Hex + rótulo para mockup a partir de metadados do pedido (fonte preferida).
+ * Usa `colorId` / `baseColor` — não interpreta `productName`.
+ */
+export function apparelPreviewColorFromOrderMeta(
+  meta: Record<string, unknown> | null | undefined,
+): { colorId: ApparelColorId | null; hex: string; label: string | null } {
+  const colorId = resolveApparelColorIdFromMeta(meta);
+  const hex = apparelColorPreviewHex(colorId);
+  const label = colorId
+    ? (APPAREL_COLORS.find((c) => c.id === colorId)?.label ?? null)
+    : null;
+  return { colorId, hex, label };
+}
+
+function matchApparelColorToken(token: string): ApparelColorId | undefined {
+  const t = token.trim().toLowerCase();
+  if (!t) return undefined;
+  const byId = APPAREL_COLORS.find((c) => c.id.toLowerCase() === t);
+  if (byId) return byId.id;
+  return APPAREL_COLORS.find((c) => c.label.toLowerCase() === t)?.id;
+}
+
+/** Infere tipo de peça e cor a partir de `productName` (legado / fallback). */
 export function previewAppearanceFromProductName(
   productName: string,
 ): {
@@ -615,22 +671,45 @@ export function previewAppearanceFromProductName(
   const typeLbl =
     APPAREL_PRODUCT_TYPES.find((t) => t.id === productType)?.label ?? "Peça";
 
-  const parts = raw.split(" · ").map((p) => p.trim());
-  const colorSegment = parts.length >= 5 ? parts[4] : "";
+  const partsDot = raw.split(" · ").map((p) => p.trim());
+  const colorSegmentDot = partsDot.length >= 5 ? partsDot[4]! : "";
 
-  let colorId: ApparelColorId | undefined = APPAREL_COLORS.find(
-    (c) => c.label.toLowerCase() === colorSegment.toLowerCase(),
-  )?.id;
+  let colorId = matchApparelColorToken(colorSegmentDot);
 
+  /* Formato API: «Colete — vermelho / M» ou «T-shirt — branco / L» */
   if (!colorId) {
-    colorId = APPAREL_COLORS.find((c) =>
-      raw.toLowerCase().includes(c.label.toLowerCase()),
-    )?.id;
+    const dashMatch = raw.match(/—\s*([^/]+?)\s*\//);
+    if (dashMatch?.[1]) {
+      colorId = matchApparelColorToken(dashMatch[1]);
+    }
   }
 
-  const baseColorHex = colorId
-    ? APPAREL_COLOR_PREVIEW_HEX[colorId]
-    : DEFAULT_PREVIEW_HEX;
+  /* Último recurso: token exacto no texto, ordenado do label mais longo → evita
+   * «leite» dentro de «Colete» e «verde» a engolir «verde-militar». */
+  if (!colorId) {
+    const lower = raw.toLowerCase();
+    const sorted = [...APPAREL_COLORS].sort(
+      (a, b) => b.label.length - a.label.length || b.id.length - a.id.length,
+    );
+    for (const c of sorted) {
+      const label = c.label.toLowerCase();
+      const id = c.id.toLowerCase();
+      const labelRe = new RegExp(
+        `(^|[^\\p{L}\\p{N}])${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=[^\\p{L}\\p{N}]|$)`,
+        "iu",
+      );
+      const idRe = new RegExp(
+        `(^|[^\\p{L}\\p{N}])${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=[^\\p{L}\\p{N}]|$)`,
+        "iu",
+      );
+      if (labelRe.test(lower) || idRe.test(lower)) {
+        colorId = c.id;
+        break;
+      }
+    }
+  }
+
+  const baseColorHex = apparelColorPreviewHex(colorId ?? null);
 
   const colorLbl = colorId
     ? APPAREL_COLORS.find((c) => c.id === colorId)?.label
@@ -666,24 +745,11 @@ function receiptAgeBandFromMetadata(
 }
 
 function receiptColorLabel(meta: Record<string, unknown>): string {
-  const colorId = meta.colorId;
-  if (typeof colorId === "string" && colorId.trim()) {
-    const fromCatalog = APPAREL_COLORS.find((c) => c.id === colorId.trim())
-      ?.label;
-    if (fromCatalog) return fromCatalog;
-  }
+  const resolved = resolveApparelColorIdFromMeta(meta);
+  if (resolved) return colorLabel(resolved);
   const baseColor = meta.baseColor;
   if (typeof baseColor === "string" && baseColor.trim()) {
-    const t = baseColor.trim();
-    const byId = APPAREL_COLORS.find(
-      (c) => c.id.toLowerCase() === t.toLowerCase(),
-    )?.label;
-    if (byId) return byId;
-    const byLabel = APPAREL_COLORS.find(
-      (c) => c.label.toLowerCase() === t.toLowerCase(),
-    )?.label;
-    if (byLabel) return byLabel;
-    return t;
+    return baseColor.trim();
   }
   return "";
 }

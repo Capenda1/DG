@@ -18,7 +18,9 @@ describe('OrdersService', () => {
     order: {
       findMany: jest.fn(),
       findUnique: jest.fn(),
+      findUniqueOrThrow: jest.fn(),
       update: jest.fn(),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       delete: jest.fn(),
     },
     orderItem: {
@@ -27,7 +29,7 @@ describe('OrdersService', () => {
     auditLog: {
       create: jest.fn(),
     },
-    $transaction: jest.fn(async (fn: (tx: typeof prisma) => Promise<unknown>) =>
+    $transaction: jest.fn(async (fn: (tx: unknown) => Promise<unknown>) =>
       fn(prisma),
     ),
   };
@@ -41,10 +43,14 @@ describe('OrdersService', () => {
   const insumos = {
     descontarPorPedido: jest.fn().mockResolvedValue(undefined),
     addMovimento: jest.fn().mockResolvedValue(undefined),
+    restoreOrderStockForCancellation: jest.fn().mockResolvedValue(0),
+    reapplyOrderStockForReopen: jest.fn().mockResolvedValue(0),
   };
   const finance = {
     recordLedgerEntryForOrderPayment: jest.fn().mockResolvedValue(undefined),
     ensureBalcaoCashSessionIsOpen: jest.fn().mockResolvedValue(undefined),
+    reverseOrderPaymentForCancellation: jest.fn().mockResolvedValue(0),
+    reactivateOrderPaymentForReopen: jest.fn().mockResolvedValue(0),
   };
   const notifications = {
     notifyOrderFinished: jest.fn().mockResolvedValue(undefined),
@@ -202,14 +208,75 @@ describe('OrdersService', () => {
       id: 'order-1',
       status: OrderStatus.CANCELLED,
     });
+    prisma.order.findUniqueOrThrow.mockResolvedValue({
+      id: 'order-1',
+      status: OrderStatus.CANCELLED,
+    });
     prisma.auditLog.create.mockResolvedValue({});
 
-    await service.changeStatus('order-1', OrderStatus.CANCELLED, {
+    await service.changeStatus(
+      'order-1',
+      OrderStatus.CANCELLED,
+      {
+        id: 'admin-1',
+        role: UserRole.ADMIN,
+      },
+      undefined,
+      'Pedido duplicado',
+    );
+
+    expect(prisma.order.updateMany).toHaveBeenCalled();
+  });
+
+  it('exige motivo para cancelar', async () => {
+    prisma.order.findUnique.mockResolvedValue({
+      id: 'order-1',
+      orderNumber: 'DG-2026-00001',
+      status: OrderStatus.SUBMITTED,
+      clientId: 'client-1',
+      designerId: null,
+      paymentMethod: null,
+      paymentProofKey: null,
+      orderOrigin: OrderOrigin.ONLINE,
+      items: [],
+    });
+
+    await expect(
+      service.changeStatus(
+        'order-1',
+        OrderStatus.CANCELLED,
+        { id: 'admin-1', role: UserRole.ADMIN },
+        undefined,
+        '  ',
+      ),
+    ).rejects.toThrow(/motivo do cancelamento/i);
+
+    expect(prisma.order.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('reabre cancelado e reaplica stock e pagamento', async () => {
+    prisma.order.findUnique.mockResolvedValue({
+      id: 'order-1',
+      orderNumber: 'DG-2026-00001',
+      status: OrderStatus.CANCELLED,
+      cancelledFromStatus: OrderStatus.APPROVED,
+    });
+    prisma.order.findUniqueOrThrow.mockResolvedValue({
+      id: 'order-1',
+      status: OrderStatus.APPROVED,
+    });
+
+    const result = await service.reopenCancelledOrder('order-1', {
       id: 'admin-1',
       role: UserRole.ADMIN,
     });
 
-    expect(prisma.order.update).toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({ status: OrderStatus.APPROVED }),
+    );
+    expect(insumos.reapplyOrderStockForReopen).toHaveBeenCalled();
+    expect(finance.reactivateOrderPaymentForReopen).toHaveBeenCalled();
+    expect(prisma.auditLog.create).toHaveBeenCalled();
   });
 
   it('permite VALIDATION_PAYMENT quando há comprovativo', async () => {
@@ -452,16 +519,22 @@ describe('OrdersService', () => {
       id: 'order-1',
       status: OrderStatus.CANCELLED,
     });
+    prisma.order.findUniqueOrThrow.mockResolvedValue({
+      id: 'order-1',
+      status: OrderStatus.CANCELLED,
+    });
     prisma.auditLog.create.mockResolvedValue({});
 
     const result = await service.changeStatus(
       'order-1',
       OrderStatus.CANCELLED,
       { id: 'admin-1', role: UserRole.ADMIN },
+      undefined,
+      'Cliente solicitou cancelamento',
     );
 
     expect(result).toEqual(expect.objectContaining({ id: 'order-1' }));
-    expect(prisma.order.update).toHaveBeenCalled();
+    expect(prisma.order.updateMany).toHaveBeenCalled();
     expect(prisma.auditLog.create).toHaveBeenCalled();
   });
 

@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, UserRole } from '@prisma/client';
+import { ClientType, Prisma, UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { randomBytes, randomUUID } from 'crypto';
 import {
@@ -12,6 +12,7 @@ import {
   isValidEmailShape,
   normalizeEmail,
 } from '../../common/email.util';
+import { normalizeAngolaPhoneToE164 } from '../../common/angola-phone.util';
 import { PrismaService } from '../../prisma/prisma.service';
 
 @Injectable()
@@ -28,6 +29,55 @@ export class UsersService {
         email: { equals: normalized, mode: 'insensitive' },
       },
     });
+  }
+
+  /**
+   * Procura uma única conta CLIENT pelo número angolano normalizado.
+   * A comparação em memória mantém compatibilidade com registos antigos
+   * guardados como 923…, 244923…, +244… ou com espaços.
+   * Números duplicados são tratados como ambíguos e não autenticam.
+   */
+  async findClientByPhone(phone: string) {
+    const normalized = normalizeAngolaPhoneToE164(phone);
+    if (!normalized) return null;
+
+    const candidates = await this.prisma.user.findMany({
+      where: {
+        role: UserRole.CLIENT,
+        phone: { not: null },
+      },
+    });
+    const matches = candidates.filter(
+      (user) => normalizeAngolaPhoneToE164(user.phone) === normalized,
+    );
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  /** Valida e reserva logicamente um telefone único entre contas CLIENT. */
+  async assertClientPhoneAvailable(
+    phone: string,
+    excludeUserId?: string,
+  ): Promise<string> {
+    const normalized = normalizeAngolaPhoneToE164(phone);
+    if (!normalized) {
+      throw new BadRequestException('Número de telefone angolano inválido.');
+    }
+    const candidates = await this.prisma.user.findMany({
+      where: {
+        role: UserRole.CLIENT,
+        phone: { not: null },
+        ...(excludeUserId ? { id: { not: excludeUserId } } : {}),
+      },
+    });
+    const exists = candidates.some(
+      (user) => normalizeAngolaPhoneToE164(user.phone) === normalized,
+    );
+    if (exists) {
+      throw new ConflictException(
+        'Este número de telefone já está associado a outro cliente.',
+      );
+    }
+    return normalized;
   }
 
   /** Garante email único em todas as contas (cliente, admin, equipa). */
@@ -82,6 +132,9 @@ export class UsersService {
         role: true,
         mfaEnabled: true,
         phone: true,
+        clientType: true,
+        nif: true,
+        active: true,
         createdAt: true,
       },
     });
@@ -106,6 +159,7 @@ export class UsersService {
         { email: { contains: q, mode: 'insensitive' } },
         { name: { contains: q, mode: 'insensitive' } },
         { phone: { contains: q, mode: 'insensitive' } },
+        { nif: { contains: q, mode: 'insensitive' } },
       ];
     }
 
@@ -121,6 +175,9 @@ export class UsersService {
           role: true,
           mfaEnabled: true,
           phone: true,
+          clientType: true,
+          nif: true,
+          active: true,
           createdAt: true,
           _count: { select: { ordersAsClient: true } },
         },
@@ -141,6 +198,9 @@ export class UsersService {
         role: true,
         mfaEnabled: true,
         phone: true,
+        clientType: true,
+        nif: true,
+        active: true,
         createdAt: true,
       },
       orderBy: { createdAt: 'desc' },
@@ -156,10 +216,11 @@ export class UsersService {
     return this.prisma.user.findMany({
       where: {
         role: UserRole.CLIENT,
+        active: true,
         OR: [
           { name: { contains: q, mode: 'insensitive' } },
           { phone: { contains: q, mode: 'insensitive' } },
-          { email: { contains: q, mode: 'insensitive' } },
+          { nif: { contains: q, mode: 'insensitive' } },
         ],
       },
       select: {
@@ -167,6 +228,9 @@ export class UsersService {
         email: true,
         name: true,
         phone: true,
+        clientType: true,
+        nif: true,
+        active: true,
         createdAt: true,
       },
       take: Math.min(Math.max(take, 1), 50),
@@ -180,28 +244,32 @@ export class UsersService {
   async createBalcaoClient(opts: {
     name: string;
     phone?: string | null;
-    email?: string | null;
+    isCompany?: boolean;
+    nif?: string | null;
   }) {
     const name = opts.name.trim();
     if (name.length < 2) {
       throw new BadRequestException('Nome do cliente inválido.');
     }
-    const email = (
-      opts.email?.trim() ||
-      `balcao.${randomUUID().replace(/-/g, '').slice(0, 16)}@cliente.local`
-    ).toLowerCase();
-
-    if (!email.endsWith('@cliente.local')) {
-      await this.assertEmailAvailable(email);
-    } else {
-      const exists = await this.prisma.user.findUnique({
-        where: { email },
-        select: { id: true },
-      });
-      if (exists) {
-        throw new ConflictException(EMAIL_ALREADY_REGISTERED_MESSAGE);
-      }
+    const isCompany = opts.isCompany === true;
+    const nif = isCompany ? opts.nif?.trim() || '' : '';
+    if (isCompany && !nif) {
+      throw new BadRequestException(
+        'O NIF é obrigatório para contas de empresa.',
+      );
     }
+    const email =
+      `balcao.${randomUUID().replace(/-/g, '').slice(0, 16)}@cliente.local`.toLowerCase();
+    const exists = await this.prisma.user.findUnique({
+      where: { email },
+      select: { id: true },
+    });
+    if (exists) {
+      throw new ConflictException(EMAIL_ALREADY_REGISTERED_MESSAGE);
+    }
+    const phone = opts.phone?.trim()
+      ? await this.assertClientPhoneAvailable(opts.phone)
+      : null;
     const plain = randomBytes(18).toString('base64url');
     const passwordHash = await bcrypt.hash(plain, 10);
     try {
@@ -211,13 +279,18 @@ export class UsersService {
           name,
           passwordHash,
           role: UserRole.CLIENT,
-          phone: opts.phone?.trim() ? opts.phone.trim() : null,
+          phone,
+          clientType: isCompany ? ClientType.COMPANY : ClientType.INDIVIDUAL,
+          nif: isCompany ? nif : null,
         },
         select: {
           id: true,
           email: true,
           name: true,
           phone: true,
+          clientType: true,
+          nif: true,
+          active: true,
           createdAt: true,
         },
       });
@@ -235,6 +308,8 @@ export class UsersService {
     passwordHash: string;
     role: UserRole;
     phone?: string | null;
+    clientType?: ClientType | null;
+    nif?: string | null;
   }) {
     const email = normalizeEmail(data.email);
     try {
@@ -245,6 +320,11 @@ export class UsersService {
           passwordHash: data.passwordHash,
           role: data.role,
           phone: data.phone?.trim() ? data.phone.trim() : undefined,
+          clientType:
+            data.clientType ??
+            (data.role === UserRole.CLIENT ? ClientType.INDIVIDUAL : undefined),
+          nif: data.nif?.trim() ? data.nif.trim() : undefined,
+          active: true,
         },
         select: {
           id: true,
@@ -253,6 +333,9 @@ export class UsersService {
           role: true,
           mfaEnabled: true,
           phone: true,
+          clientType: true,
+          nif: true,
+          active: true,
           createdAt: true,
         },
       });

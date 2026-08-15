@@ -58,7 +58,6 @@ import {
   downloadModelagemSpecsPdf,
   modelagemSpecsHasExportableContent,
 } from "@/lib/modelagem-specs-export";
-import { restoreAndEnhanceImage } from "@/lib/image-restore-enhance";
 import { randomClientId } from "@/lib/random-id";
 import {
   sanitizeSignedIntString,
@@ -72,6 +71,7 @@ import {
 } from "@/lib/modelagem-dirty";
 import {
   accountPedidosIndexHref,
+  contaPedidoArtigosPath,
   contaPedidoPath,
   hardNavigateReplace,
   modelagemExitOverviewHref,
@@ -84,7 +84,7 @@ import {
 import {
   type MockupViewer2DHandle,
 } from "@/components/modelagem/MockupViewer2D";
-import { ModelagemMobileEditSheet } from "@/components/modelagem/ModelagemMobileEditSheet";
+import { ModelagemColorPalette } from "@/components/modelagem/ModelagemColorPalette";
 import type { LayerTransformPatch } from "@/components/modelagem/modelagem-touch-gestures";
 
 /* ── Constantes ── */
@@ -965,8 +965,9 @@ export default function ContaPedidoModelagemPage() {
     isPhone: boolean;
     navbarH: number;       // altura real da navbar sticky (px)
     mockupH: number;       // altura do mockup em modo empilhado (px)
+    panelMinH: number;     // altura mínima do painel de edição (px)
     deviceType: "phone-sm" | "phone-lg" | "tablet" | "desktop";
-  }>({ isPhone: false, navbarH: 0, mockupH: 280, deviceType: "desktop" });
+  }>({ isPhone: false, navbarH: 0, mockupH: 280, panelMinH: 420, deviceType: "desktop" });
 
   useEffect(() => {
     const compute = () => {
@@ -991,16 +992,20 @@ export default function ContaPedidoModelagemPage() {
       else                 deviceType = "desktop";
 
       /*
-       * Altura do mockup em modo empilhado (só telefones < 640 px):
-       *   Alvo   → 54 % da altura do viewport
-       *   Mínimo → 260 px
-       *   Máximo → 64 % do viewport (prioriza área de design)
+       * Telemóvel: mockup compacto o suficiente para o painel de edição
+       * ficar visível de imediato (barra de acções ~72 px + cabeçalho compacto).
        */
+      const ACTION_BAR_H = 72;
+      const COMPACT_HEADER_H = 48;
+      const usable = Math.max(0, vh - navbarH);
       const mockupH = isPhone
-        ? Math.round(Math.min(Math.max(vh * 0.54, 260), vh * 0.64))
+        ? Math.round(Math.min(Math.max(usable * 0.40, 220), usable * 0.46))
         : 0;
+      const panelMinH = isPhone
+        ? Math.max(280, vh - navbarH - mockupH - COMPACT_HEADER_H - ACTION_BAR_H)
+        : 420;
 
-      setDeviceLayout({ isPhone, navbarH, mockupH, deviceType });
+      setDeviceLayout({ isPhone, navbarH, mockupH, panelMinH, deviceType });
     };
 
     compute();
@@ -1031,8 +1036,6 @@ export default function ContaPedidoModelagemPage() {
   const futureRef = useRef<AnyLayer[][]>([]);               // estados futuros (após undo)
   const [historyLen, setHistoryLen] = useState(0);
   const [futureLen, setFutureLen] = useState(0);
-  /** Altura do sheet móvel — reserva espaço para o mockup não ficar coberto. */
-  const [mobileSheetH, setMobileSheetH] = useState(0);
   const patchHistoryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const patchHistorySnapshotRef = useRef<AnyLayer[] | null>(null); // snapshot antes da primeira edição contínua
 
@@ -1040,13 +1043,6 @@ export default function ContaPedidoModelagemPage() {
   const [removingBgId, setRemovingBgId] = useState<string | null>(null);
   const [removeBgErr, setRemoveBgErr] = useState<string | null>(null);
   const [bgTolerance, setBgTolerance] = useState(30);
-
-  const [restoringImageId, setRestoringImageId] = useState<string | null>(null);
-  const [restoreErr, setRestoreErr] = useState<string | null>(null);
-  const [restoreUpscale, setRestoreUpscale] = useState<1 | 1.5 | 2>(2);
-  const [restoreStrength, setRestoreStrength] = useState<
-    "subtle" | "normal" | "strong"
-  >("normal");
 
   /* Recorte */
   const [cropLayerId, setCropLayerId] = useState<string | null>(null);
@@ -1358,11 +1354,10 @@ export default function ContaPedidoModelagemPage() {
   }, [order, loading, layers, order?.artVersions]);
 
   useEffect(() => {
-    if (selectedId && deviceLayout.isPhone) {
+    if (selectedId) {
       setSidePanelTab("edit");
     }
-    if (!selectedId) setMobileSheetH(0);
-  }, [selectedId, deviceLayout.isPhone]);
+  }, [selectedId]);
 
   useEffect(() => {
     if (!order) return;
@@ -2509,52 +2504,6 @@ export default function ContaPedidoModelagemPage() {
     }
   }, [layers, bgTolerance, patchLayer, pushHistory, clientModelagemReadOnly]);
 
-  /* Restaurar / melhorar qualidade raster (contraste + nitidez + escala opcional) */
-  const restoreImageRaster = useCallback(
-    async (layerId: string) => {
-      const layer = layers.find((l) => l.id === layerId);
-      if (!layer || layer.kind !== "image") return;
-      if (clientModelagemReadOnly) return;
-      const il = layer as ImageLayerEx;
-      setRestoringImageId(layerId);
-      setRestoreErr(null);
-      pushHistory(layersRef.current);
-      try {
-        const newUrl = await restoreAndEnhanceImage(il.src, {
-          upscaleFactor: restoreUpscale,
-          strength: restoreStrength,
-        });
-        blobUrlsRef.current.add(newUrl);
-        if (il.src.startsWith("blob:")) {
-          URL.revokeObjectURL(il.src);
-          blobUrlsRef.current.delete(il.src);
-        }
-        imageCacheRef.current.delete(layerId);
-        const baseName = il.name ?? "imagem.png";
-        const dot = baseName.lastIndexOf(".");
-        const newName =
-          dot > 0
-            ? `${baseName.slice(0, dot)}-melhorada${baseName.slice(dot)}`
-            : `${baseName}-melhorada`;
-        patchLayer(layerId, {
-          src: newUrl,
-          orderModelagemFileId: undefined,
-          name: newName,
-        } as Partial<ImageLayerEx>);
-        setBumpRedraw((n) => n + 1);
-      } catch (e) {
-        setRestoreErr(
-          e instanceof Error ? e.message : "Não foi possível melhorar a imagem.",
-        );
-        historyRef.current = historyRef.current.slice(0, -1);
-        setHistoryLen(historyRef.current.length);
-      } finally {
-        setRestoringImageId(null);
-      }
-    },
-    [layers, restoreUpscale, restoreStrength, patchLayer, pushHistory, clientModelagemReadOnly],
-  );
-
   /* ── Guardas de navegação ── */
   if (!id) {
     router.replace(accountPedidosIndexHref(loadSession()?.user.role ?? ""));
@@ -2630,6 +2579,7 @@ export default function ContaPedidoModelagemPage() {
         refreshing={refreshing}
         onRefresh={() => void refreshOrder()}
         isClientOnlineDraft={isClientOnlineDraft}
+        compact={deviceLayout.isPhone}
       />
 
       {/* ── Workspace: mockup + painel (prioridade visual — acima dos detalhes) ── */}
@@ -2637,11 +2587,15 @@ export default function ContaPedidoModelagemPage() {
 
         {/*
           * Mockup 2D fotorrealista
-          * • Telemóvel (< 640 px) → sticky abaixo da navbar, ~54 % da altura do ecrã
+          * • Telemóvel (< 640 px) → sticky, ~40 % da altura útil (deixa o editor visível)
           * • ≥ 640 px             → preenche a altura útil do viewport
           */}
         <div
-          className={`conta-animate-stagger conta-order-card relative min-h-[280px] overflow-hidden rounded-2xl border border-zinc-200/80 shadow-[0_24px_48px_-28px_rgba(0,0,0,0.2)] ring-1 ring-inset ring-zinc-200/50 dark:border-white/[0.07] dark:shadow-[0_40px_100px_-20px_rgba(0,0,0,0.9)] dark:ring-white/[0.03] sm:min-h-[min(760px,calc(100dvh-5rem))] sm:h-[min(760px,calc(100dvh-5rem))] ${deviceLayout.isPhone ? "bg-zinc-950" : "bg-zinc-950/90"}`}
+          className={`conta-animate-stagger conta-order-card relative min-h-[280px] overflow-hidden border border-zinc-200/80 shadow-[0_24px_48px_-28px_rgba(0,0,0,0.2)] ring-1 ring-inset ring-zinc-200/50 dark:border-white/[0.07] dark:shadow-[0_40px_100px_-20px_rgba(0,0,0,0.9)] dark:ring-white/[0.03] sm:min-h-[min(760px,calc(100dvh-5rem))] sm:h-[min(760px,calc(100dvh-5rem))] ${
+            deviceLayout.isPhone
+              ? "-mx-4 w-[calc(100%+2rem)] rounded-none border-x-0 bg-zinc-950"
+              : "rounded-2xl bg-zinc-950/90"
+          }`}
           style={{
             "--conta-i": 0,
             ...(deviceLayout.isPhone
@@ -2666,11 +2620,6 @@ export default function ContaPedidoModelagemPage() {
 
           <div
             className="h-full w-full"
-            style={
-              deviceLayout.isPhone && mobileSheetH > 0
-                ? { paddingBottom: mobileSheetH }
-                : undefined
-            }
           >
             <ProductMockupViewer
               ref={mockupRef}
@@ -2701,42 +2650,23 @@ export default function ContaPedidoModelagemPage() {
             ) : null}
           </div>
 
-          {deviceLayout.isPhone && selected ? (
-            <ModelagemMobileEditSheet
-              layer={{
-                id: selected.id,
-                kind: selected.kind,
-                scale: selected.scale,
-                rotationDeg: selected.rotationDeg,
-                widthRel: selected.kind === "image" ? (selected as ImageLayerEx).widthRel : undefined,
-                fontSize: selected.kind === "text" ? (selected as TextLayerEx).fontSize : undefined,
-                locked: clientModelagemReadOnly || Boolean(selected.designerModel),
-                name: selected.kind === "image" ? (selected as ImageLayerEx).name : undefined,
-                text: selected.kind === "text" ? (selected as TextLayerEx).text : undefined,
-              }}
-              readOnly={clientModelagemReadOnly}
-              canUndo={historyLen > 0}
-              onPatch={(patch) => patchLayer(selected.id, patch as Partial<AnyLayer>)}
-              onRemove={() => removeLayer(selected.id)}
-              onUndo={undo}
-              onClose={() => {
-                setSelectedId(null);
-                setMobileSheetH(0);
-              }}
-              onOccupiedHeightChange={setMobileSheetH}
-            />
-          ) : null}
-
         </div>
 
         {/* ── Painel de edição ── */}
         <div
-          className="conta-animate-stagger flex min-h-[min(420px,52dvh)] min-w-0 flex-col rounded-2xl border border-zinc-200/80 bg-white/60 ring-1 ring-zinc-200/40 dark:border-zinc-700/40 dark:bg-zinc-950/60 dark:ring-white/[0.03] sm:min-h-[min(760px,calc(100dvh-5rem))] sm:h-[min(760px,calc(100dvh-5rem))]"
-          style={{ "--conta-i": 1 } as CSSProperties}
+          className={`conta-animate-stagger flex min-w-0 flex-col rounded-2xl border border-zinc-200/80 bg-white/60 ring-1 ring-zinc-200/40 dark:border-zinc-700/40 dark:bg-zinc-950/60 dark:ring-white/[0.03] sm:min-h-[min(760px,calc(100dvh-5rem))] sm:h-[min(760px,calc(100dvh-5rem))] ${
+            deviceLayout.isPhone ? "" : "min-h-[min(420px,52dvh)]"
+          }`}
+          style={{
+            "--conta-i": 1,
+            ...(deviceLayout.isPhone
+              ? { minHeight: deviceLayout.panelMinH }
+              : {}),
+          } as CSSProperties}
         >
 
           {/* Área scrollável — controlos, tabs, camadas */}
-          <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-4">
+          <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-3 pb-6 sm:p-4">
 
           {/* Barra de Undo / Redo */}
           <div className="flex items-center gap-1.5 rounded-xl border border-zinc-700/40 bg-zinc-900/50 px-2 py-1.5">
@@ -2945,55 +2875,51 @@ export default function ContaPedidoModelagemPage() {
                       />
                     </div>
 
-                    {/* Fonte + Cor */}
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="mb-1 block text-[11px] font-medium text-zinc-400">Fonte</label>
-                        <select
-                          value={
-                            FONTS.find((f) => f.css === tl.fontFamily)?.id ??
-                            sysFonts.find((f) => f.css === tl.fontFamily)?.family ??
-                            "sans"
-                          }
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            const staticFont = FONTS.find((f) => f.id === val);
-                            const sysFont = sysFonts.find((f) => f.family === val);
-                            patchLayer(tl.id, {
-                              fontFamily: staticFont?.css ?? sysFont?.css ?? fontCss(val),
-                            } as Partial<TextLayerEx>);
-                          }}
-                          className="w-full rounded-lg border border-zinc-600/50 bg-zinc-900 px-2 py-2.5 text-[11px] text-white outline-none transition focus:border-amber-500/40 sm:py-1.5"
-                        >
-                          <optgroup label="Genéricas">
-                            {FONTS.filter((f) => !f.google).map((f) => (
-                              <option key={f.id} value={f.id}>{f.label}</option>
+                    {/* Fonte */}
+                    <div>
+                      <label className="mb-1 block text-[11px] font-medium text-zinc-400">Fonte</label>
+                      <select
+                        value={
+                          FONTS.find((f) => f.css === tl.fontFamily)?.id ??
+                          sysFonts.find((f) => f.css === tl.fontFamily)?.family ??
+                          "sans"
+                        }
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          const staticFont = FONTS.find((f) => f.id === val);
+                          const sysFont = sysFonts.find((f) => f.family === val);
+                          patchLayer(tl.id, {
+                            fontFamily: staticFont?.css ?? sysFont?.css ?? fontCss(val),
+                          } as Partial<TextLayerEx>);
+                        }}
+                        className="w-full rounded-lg border border-zinc-600/50 bg-zinc-900 px-2 py-2.5 text-[11px] text-white outline-none transition focus:border-amber-500/40 sm:py-1.5"
+                      >
+                        <optgroup label="Genéricas">
+                          {FONTS.filter((f) => !f.google).map((f) => (
+                            <option key={f.id} value={f.id}>{f.label}</option>
+                          ))}
+                        </optgroup>
+                        <optgroup label="Google Fonts">
+                          {FONTS.filter((f) => f.google).map((f) => (
+                            <option key={f.id} value={f.id}>{f.label}</option>
+                          ))}
+                        </optgroup>
+                        {sysFonts.length > 0 && (
+                          <optgroup label={`Sistema (${sysFonts.length} detetadas)`}>
+                            {sysFonts.map((f) => (
+                              <option key={f.family} value={f.family}>{f.family}</option>
                             ))}
                           </optgroup>
-                          <optgroup label="Google Fonts">
-                            {FONTS.filter((f) => f.google).map((f) => (
-                              <option key={f.id} value={f.id}>{f.label}</option>
-                            ))}
-                          </optgroup>
-                          {sysFonts.length > 0 && (
-                            <optgroup label={`Sistema (${sysFonts.length} detetadas)`}>
-                              {sysFonts.map((f) => (
-                                <option key={f.family} value={f.family}>{f.family}</option>
-                              ))}
-                            </optgroup>
-                          )}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-[11px] font-medium text-zinc-400">Cor</label>
-                        <input
-                          type="color"
-                          value={hexColor(tl.color)}
-                          onChange={(e) => patchLayer(tl.id, { color: e.target.value } as Partial<TextLayerEx>)}
-                          className="h-[44px] w-full cursor-pointer rounded-lg border border-zinc-600/50 bg-zinc-900 px-1 sm:h-[30px]"
-                        />
-                      </div>
+                        )}
+                      </select>
                     </div>
+
+                    <ModelagemColorPalette
+                      label="Cor do texto"
+                      value={hexColor(tl.color)}
+                      onChange={(hex) => patchLayer(tl.id, { color: hex } as Partial<TextLayerEx>)}
+                      density={deviceLayout.isPhone ? "touch" : "compact"}
+                    />
 
                     {/* Tamanho */}
                     <div>
@@ -3173,11 +3099,12 @@ export default function ContaPedidoModelagemPage() {
                             className="w-full touch-manipulation accent-amber-500" />
                         </div>
                         <div>
-                          <label className="mb-1 block text-[11px] font-medium text-zinc-400">Cor da sombra 3D</label>
-                          <input type="color"
+                          <ModelagemColorPalette
+                            label="Cor da sombra 3D"
                             value={tl.depthColor || "#1a0500"}
-                            onChange={(e) => patchLayer(tl.id, { depthColor: e.target.value } as Partial<TextLayerEx>)}
-                            className="h-[44px] w-full cursor-pointer rounded-lg border border-zinc-600/50 bg-zinc-900 px-1 sm:h-[30px]" />
+                            onChange={(hex) => patchLayer(tl.id, { depthColor: hex } as Partial<TextLayerEx>)}
+                            density={deviceLayout.isPhone ? "touch" : "compact"}
+                          />
                         </div>
                       </div>
                     )}
@@ -3239,17 +3166,21 @@ export default function ContaPedidoModelagemPage() {
                     </div>
 
                     {/* Contorno */}
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="mb-1 block text-[11px] font-medium text-zinc-400">Contorno</label>
-                        <input type="color"
-                          value={tl.strokeColor || "#000000"}
-                          onChange={(e) => patchLayer(tl.id, { strokeColor: e.target.value, strokeWidth: tl.strokeWidth === 0 ? 2 : tl.strokeWidth } as Partial<TextLayerEx>)}
-                          className="h-[44px] w-full cursor-pointer rounded-lg border border-zinc-600/50 bg-zinc-900 px-1 sm:h-[30px]" />
-                      </div>
+                    <div className="space-y-2">
+                      <ModelagemColorPalette
+                        label="Cor do contorno"
+                        value={tl.strokeColor || "#000000"}
+                        onChange={(hex) =>
+                          patchLayer(tl.id, {
+                            strokeColor: hex,
+                            strokeWidth: tl.strokeWidth === 0 ? 2 : tl.strokeWidth,
+                          } as Partial<TextLayerEx>)
+                        }
+                        density={deviceLayout.isPhone ? "touch" : "compact"}
+                      />
                       <div>
                         <div className="mb-1 flex items-center justify-between">
-                          <label className="text-[11px] font-medium text-zinc-400">Espessura</label>
+                          <label className="text-[11px] font-medium text-zinc-400">Espessura do contorno</label>
                           <span className="text-[11px] tabular-nums text-zinc-500">{tl.strokeWidth}px</span>
                         </div>
                         <input type="range" min={0} max={12} value={tl.strokeWidth}
@@ -3482,107 +3413,6 @@ export default function ContaPedidoModelagemPage() {
                       </svg>
                       Recortar imagem
                     </button>
-
-                    {/* Restaurar / melhorar qualidade */}
-                    <div className="rounded-xl border border-teal-500/22 bg-teal-950/18 p-2.5">
-                      <div className="mb-2 flex items-center justify-between gap-2">
-                        <p className="text-[10px] font-semibold uppercase tracking-widest text-teal-400/85">
-                          Restaurar e qualidade
-                        </p>
-                        <span className="rounded-full bg-teal-500/14 px-1.5 py-0.5 text-[9px] font-medium text-teal-200/90">
-                          No equipamento
-                        </span>
-                      </div>
-                      <p className="mb-2 text-[10px] leading-snug text-zinc-500">
-                        Ajuste de níveis + nitidez e, se quiser, mais pixels (útil
-                        antes de imprimir). Não recupera fotos muito estragadas
-                        como ferramentas de IA especializadas.
-                      </p>
-                      <div className="mb-2 grid grid-cols-2 gap-2">
-                        <label className="flex flex-col gap-1">
-                          <span className="text-[11px] font-medium text-zinc-400">
-                            Ampliação
-                          </span>
-                          <select
-                            title="Escalar resultado"
-                            value={String(restoreUpscale)}
-                            disabled={restoringImageId === il.id}
-                            onChange={(e) => {
-                              setRestoreErr(null);
-                              setRestoreUpscale(
-                                Number(e.target.value) as 1 | 1.5 | 2,
-                              );
-                            }}
-                            className="rounded-lg border border-white/[0.08] bg-black/40 px-2 py-1.5 text-[11px] text-white disabled:opacity-50"
-                          >
-                            <option value="1">×1 só correção</option>
-                            <option value="1.5">×1,5 mais nítidos</option>
-                            <option value="2">×2 mais pixels</option>
-                          </select>
-                        </label>
-                        <label className="flex flex-col gap-1">
-                          <span className="text-[11px] font-medium text-zinc-400">
-                            Intensidade
-                          </span>
-                          <select
-                            title="Força dos ajustes"
-                            value={restoreStrength}
-                            disabled={restoringImageId === il.id}
-                            onChange={(e) => {
-                              setRestoreErr(null);
-                              setRestoreStrength(
-                                e.target.value as typeof restoreStrength,
-                              );
-                            }}
-                            className="rounded-lg border border-white/[0.08] bg-black/40 px-2 py-1.5 text-[11px] text-white disabled:opacity-50"
-                          >
-                            <option value="subtle">Suave</option>
-                            <option value="normal">Normal</option>
-                            <option value="strong">Forte</option>
-                          </select>
-                        </label>
-                      </div>
-                      <button
-                        type="button"
-                        disabled={restoringImageId === il.id}
-                        onClick={() => {
-                          setRestoreErr(null);
-                          void restoreImageRaster(il.id);
-                        }}
-                        className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-teal-500/35 bg-teal-500/12 py-2 text-[11px] font-semibold text-teal-100 transition hover:bg-teal-500/22 disabled:cursor-wait disabled:opacity-55"
-                      >
-                        {restoringImageId === il.id ? (
-                          <>
-                            <span className="h-3 w-3 animate-spin rounded-full border border-teal-400/35 border-t-teal-300" />
-                            A processar…
-                          </>
-                        ) : (
-                          <>
-                            <svg
-                              className="h-3.5 w-3.5"
-                              viewBox="0 0 16 16"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="1.7"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                d="M2.5 8h2l1.2-4 2.3 10 2-6h6"
-                              />
-                            </svg>
-                            Melhorar imagem
-                          </>
-                        )}
-                      </button>
-                      {restoreErr && (
-                        <div className="mt-2 flex items-start gap-1.5 rounded-lg border border-red-500/25 bg-red-950/30 px-2.5 py-2">
-                          <p className="text-[10px] text-red-300">{restoreErr}</p>
-                        </div>
-                      )}
-                      <p className="mt-1.5 text-[10px] text-zinc-600">
-                        Duplique a camada se quiser manter o ficheiro original na mesma composição.
-                      </p>
-                    </div>
 
                     {/* Remover fundo */}
                     <div className="rounded-xl border border-violet-500/20 bg-violet-950/20 p-2.5">
@@ -3818,6 +3648,9 @@ export default function ContaPedidoModelagemPage() {
         }}
         onSubmit={() => void handleOpenSubmit()}
         onContinueBalcao={() => void continueToBalcaoPayment()}
+        artigosHref={
+          isClientOnlineDraft ? contaPedidoArtigosPath(order.id) : null
+        }
       />
 
       {/* Modal de recorte */}

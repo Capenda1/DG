@@ -18,6 +18,7 @@ import { BootstrapAdminDto } from './dto/bootstrap-admin.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
+import { RegisterClientDto } from './dto/register-client.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { VerifyResetCodeDto } from './dto/verify-reset-code.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
@@ -57,6 +58,17 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   login(@Body() dto: LoginDto, @Req() req: Request) {
     return this.auth.login(dto, req.ip, req.get('user-agent') ?? undefined);
+  }
+
+  @Post('register/client')
+  @HttpCode(HttpStatus.CREATED)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  registerClient(@Body() dto: RegisterClientDto, @Req() req: Request) {
+    return this.auth.registerClient(
+      dto,
+      req.ip,
+      req.get('user-agent') ?? undefined,
+    );
   }
 
   @Post('mfa/verify')

@@ -107,15 +107,15 @@ describe('API (e2e)', () => {
 
   it('admin cria utilizador + GET /api/orders com Bearer do cliente', async () => {
     const adminToken = await getAdminAccessToken(app.getHttpServer());
-    const email = `e2e_${Date.now()}@example.test`;
+    const phone = `923${String(Date.now()).slice(-6)}`;
     const created = await request(app.getHttpServer())
       .post('/api/admin/users')
       .set('Authorization', `Bearer ${adminToken}`)
       .send({
-        email,
         name: 'E2E User',
         password: 'senha123456',
         role: UserRole.CLIENT,
+        phone,
       })
       .expect(201);
     const userId = (created.body as { user: { id: string } }).user.id;
@@ -124,7 +124,7 @@ describe('API (e2e)', () => {
     const login = await request(app.getHttpServer())
       .post('/api/auth/login')
       .send({
-        email,
+        phone,
         password: 'senha123456',
       })
       .expect(200);
@@ -141,17 +141,18 @@ describe('API (e2e)', () => {
   it('GET /api/orders retorna apenas pedidos do cliente autenticado', async () => {
     const stamp = Date.now();
     const adminToken = await getAdminAccessToken(app.getHttpServer());
-    const userAEmail = `orders_a_${stamp}@example.test`;
-    const userBEmail = `orders_b_${stamp}@example.test`;
+    const suffix = String(stamp).slice(-5);
+    const userAPhone = `9231${suffix}`;
+    const userBPhone = `9232${suffix}`;
 
     await request(app.getHttpServer())
       .post('/api/admin/users')
       .set('Authorization', `Bearer ${adminToken}`)
       .send({
-        email: userAEmail,
         name: 'Cliente A',
         password: 'senha123456',
         role: UserRole.CLIENT,
+        phone: userAPhone,
       })
       .expect(201);
 
@@ -159,17 +160,17 @@ describe('API (e2e)', () => {
       .post('/api/admin/users')
       .set('Authorization', `Bearer ${adminToken}`)
       .send({
-        email: userBEmail,
         name: 'Cliente B',
         password: 'senha123456',
         role: UserRole.CLIENT,
+        phone: userBPhone,
       })
       .expect(201);
 
     const loginA = await request(app.getHttpServer())
       .post('/api/auth/login')
       .send({
-        email: userAEmail,
+        phone: userAPhone,
         password: 'senha123456',
       })
       .expect(200);
@@ -180,7 +181,7 @@ describe('API (e2e)', () => {
     const loginB = await request(app.getHttpServer())
       .post('/api/auth/login')
       .send({
-        email: userBEmail,
+        phone: userBPhone,
         password: 'senha123456',
       })
       .expect(200);

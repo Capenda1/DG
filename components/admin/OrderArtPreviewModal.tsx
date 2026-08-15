@@ -221,45 +221,41 @@ export function OrderArtPreviewModal({
 
   return (
     <div
-      className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto px-4 py-10 sm:items-center sm:py-12"
+      className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto px-4 py-6 sm:py-8"
       role="dialog"
       aria-modal="true"
       aria-labelledby={`art-prev-title-${target.orderId}`}
     >
       <button
         type="button"
-        className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+        className="fixed inset-0 bg-black/80 backdrop-blur-sm"
         aria-label="Fechar"
         onClick={onClose}
       />
 
-      <div className="relative mx-auto flex w-full min-w-0 max-h-[min(90vh,920px)] max-w-5xl flex-col overflow-hidden rounded-2xl border border-white/[0.08] bg-zinc-950 shadow-2xl ring-1 ring-white/[0.05]">
-        <div className="flex shrink-0 items-start justify-between gap-3 border-b border-white/[0.06] bg-black/60 px-5 py-4">
+      <div className="relative mx-auto flex w-full min-w-0 max-h-[calc(100vh-3rem)] max-w-4xl flex-col overflow-hidden rounded-2xl border border-white/[0.08] bg-zinc-950 shadow-2xl ring-1 ring-white/[0.05] sm:max-h-[calc(100vh-4rem)]">
+        <div className="flex shrink-0 items-start justify-between gap-3 border-b border-white/[0.06] bg-black/60 px-4 py-3">
           <div className="min-w-0">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-400/85">
-              Arte neste pedido
-            </p>
             <h2
               id={`art-prev-title-${target.orderId}`}
-              className="mt-1 truncate text-lg font-semibold text-white"
+              className="truncate text-base font-semibold text-white"
             >
-              {orderNumber}
+              Arte · {orderNumber}
             </h2>
             {lastArt ? (
-              <p className="mt-1 text-[11px] leading-snug text-zinc-500">
-                Última composição:{" "}
+              <p className="mt-0.5 text-[11px] leading-snug text-zinc-500">
                 <span className="font-medium text-zinc-300">
                   {lastArt.createdBy?.name?.trim() || "Utilizador"}
                 </span>
-                {" · "}
-                versão <span className="tabular-nums">{lastArt.versionIndex}</span>
+                {" · v"}
+                <span className="tabular-nums">{lastArt.versionIndex}</span>
                 {" · "}
                 <span className="tabular-nums text-zinc-400">
                   {formatModelagemSavedAt(lastArt.createdAt)}
                 </span>
               </p>
             ) : draftResponsible ? (
-              <p className="mt-1 text-[11px] leading-snug text-zinc-500">
+              <p className="mt-0.5 text-[11px] leading-snug text-zinc-500">
                 <span className="font-medium text-amber-300/90">Rascunho.</span>{" "}
                 {draftResponsible}
               </p>
@@ -268,10 +264,10 @@ export function OrderArtPreviewModal({
           <button
             type="button"
             onClick={onClose}
-            className="shrink-0 rounded-lg p-2 text-zinc-500 transition hover:bg-zinc-800 hover:text-white"
+            className="shrink-0 rounded-lg p-1.5 text-zinc-500 transition hover:bg-zinc-800 hover:text-white"
             aria-label="Fechar janela"
           >
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
@@ -280,7 +276,7 @@ export function OrderArtPreviewModal({
         {!busy && !loadErr && detail && orderId ? (
           <>
             {showStaffArtActions ? (
-              <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-white/[0.06] bg-zinc-950/88 px-5 py-2.5 backdrop-blur-md">
+              <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-white/[0.06] bg-zinc-950/88 px-4 py-2 backdrop-blur-md">
                 <button
                   type="button"
                   disabled={zipBusy}
@@ -299,7 +295,7 @@ export function OrderArtPreviewModal({
                 </Link>
               </div>
             ) : null}
-            <div className="shrink-0 border-b border-white/[0.06] bg-zinc-950/92 px-5 py-3">
+            <div className="shrink-0 border-b border-white/[0.06] bg-zinc-950/92 px-4 py-2">
               <DesignerResponsibleBanner
                 designer={detail.designer}
                 viewerRole={viewerRole}
@@ -309,7 +305,7 @@ export function OrderArtPreviewModal({
           </>
         ) : null}
 
-        <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-5 py-5">
+        <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-4">
           {busy && (
             <p className="text-sm text-zinc-500">A carregar arte e ficheiros…</p>
           )}
@@ -322,26 +318,21 @@ export function OrderArtPreviewModal({
 
           {!busy && !loadErr && (
             <>
-              <section className="mb-8">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+              <section className="mb-5">
+                <h3 className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
                   Composição guardada
                 </h3>
-                <p className="mt-1 text-[11px] text-zinc-600">
-                  {showStaffArtActions
-                    ? "Pré-visualização — na barra acima: ZIP e editor web."
-                    : "Pré-visualização da composição guardada."}
-                </p>
-                <div className="mt-4 min-w-0 overflow-hidden rounded-xl border border-white/[0.06] bg-black/35">
-                  <div className="flex min-h-[12rem] w-full min-w-0 items-center justify-center bg-[repeating-conic-gradient(#1e293b_0%_25%,#0f172a_0%_50%)] bg-[length:14px_14px] p-3 sm:p-6">
+                <div className="mt-2 min-w-0 overflow-hidden rounded-xl border border-white/[0.06] bg-black/35">
+                  <div className="flex w-full min-w-0 items-center justify-center bg-[repeating-conic-gradient(#1e293b_0%_25%,#0f172a_0%_50%)] bg-[length:14px_14px] p-2 sm:p-3">
                     {compositionUrl ? (
                       <img
                         src={compositionUrl}
                         alt={`Composição do pedido ${orderNumber}`}
                         decoding="async"
-                        className="block h-auto max-h-[min(65vh,620px)] w-auto min-w-0 max-w-full object-contain object-center"
+                        className="block h-auto max-h-[min(52vh,520px)] w-auto min-w-0 max-w-full object-contain object-center"
                       />
                     ) : (
-                      <p className="py-12 text-center text-sm text-zinc-500">
+                      <p className="py-8 text-center text-sm text-zinc-500">
                         {compositionNote ?? "Sem dados de composição."}
                       </p>
                     )}
@@ -350,34 +341,24 @@ export function OrderArtPreviewModal({
               </section>
 
               <section>
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                <h3 className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
                   Referências do cliente
                 </h3>
-                <p className="mt-1 text-[11px] text-zinc-600">
-                  {showStaffArtActions ? (
-                    <>
-                      Também disponíveis no ZIP{" "}
-                      <span className="text-zinc-500">(pasta dedicada)</span>.
-                    </>
-                  ) : (
-                    "Ficheiros que enviou consigo no pedido."
-                  )}
-                </p>
 
                 {clientFiles.length === 0 ? (
-                  <p className="mt-4 text-sm text-zinc-600">
+                  <p className="mt-2 text-xs text-zinc-600">
                     Nenhum ficheiro de referência neste pedido.
                   </p>
                 ) : (
-                  <ul className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <ul className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                     {clientFiles.map((f) => {
                       const thumb = fileThumbUrl[f.id];
                       return (
                         <li
                           key={f.id}
-                          className="flex gap-3 rounded-xl border border-white/[0.06] bg-zinc-900/40 p-3"
+                          className="flex gap-2.5 rounded-xl border border-white/[0.06] bg-zinc-900/40 p-2.5"
                         >
-                          <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-black/40 ring-1 ring-white/[0.05]">
+                          <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-black/40 ring-1 ring-white/[0.05]">
                             {thumb ? (
                               <img
                                 src={thumb}
@@ -390,7 +371,7 @@ export function OrderArtPreviewModal({
                               </span>
                             )}
                           </div>
-                          <div className="min-w-0 flex-1 py-0.5">
+                          <div className="min-w-0 flex-1">
                             <p className="truncate text-xs font-medium text-zinc-200" title={f.originalName}>
                               {f.originalName}
                             </p>
@@ -400,9 +381,9 @@ export function OrderArtPreviewModal({
                             <button
                               type="button"
                               onClick={() => void openClientFileBlob(f)}
-                              className="mt-2 text-[11px] font-semibold text-amber-400/90 hover:text-amber-300"
+                              className="mt-1 text-[11px] font-semibold text-amber-400/90 hover:text-amber-300"
                             >
-                              Abrir num separador
+                              Abrir
                             </button>
                           </div>
                         </li>

@@ -30,7 +30,8 @@ import {
 import { formatMoney } from "@/lib/format-money";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState, type CSSProperties, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import { useRegisterBottomBar } from "@/lib/app-bottom-bar";
 import { contaPedidoModelagemPath, ROUTES } from "@/lib/routes";
 import { OrderCreationWizard } from "@/components/order/OrderCreationWizard";
 
@@ -86,6 +87,8 @@ function TabButton({
 
 export default function NovoPedidoPage() {
   const router = useRouter();
+  const stickyFooterRef = useRef<HTMLDivElement>(null);
+  useRegisterBottomBar(stickyFooterRef);
   const [catalog, setCatalog] = useState<CatalogProduct[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -380,6 +383,7 @@ export default function NovoPedidoPage() {
       {/* Sticky footer */}
       {!catalogLoading ? (
         <div
+          ref={stickyFooterRef}
           className="conta-animate-fade-up fixed inset-x-0 bottom-0 z-40 border-t border-zinc-200/90 bg-white/95 px-4 py-3 shadow-[0_-12px_40px_-20px_rgba(0,0,0,0.15)] backdrop-blur-md dark:border-white/[0.08] dark:bg-zinc-950/95 dark:shadow-[0_-16px_48px_-24px_rgba(0,0,0,0.5)]"
           style={{ "--conta-delay": "160ms" } as CSSProperties}
         >

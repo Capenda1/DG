@@ -72,7 +72,7 @@ export default function RedefinirPalavraPassePage() {
       await confirmStaffPasswordReset(resetToken, password);
       clearPasswordResetSession();
       setSuccess(true);
-      window.setTimeout(() => hardNavigateReplace(ROUTES.login), 1800);
+      window.setTimeout(() => hardNavigateReplace(ROUTES.admin.login), 1800);
     } catch (err) {
       let message =
         err instanceof Error ? err.message : "Não foi possível guardar a palavra-passe.";
@@ -99,7 +99,7 @@ export default function RedefinirPalavraPassePage() {
       subtitle="Escolha uma palavra-passe com pelo menos 8 caracteres."
       footer={
         <p className="text-center text-sm text-zinc-600 dark:text-zinc-400">
-          <Link href={ROUTES.login} className="font-semibold text-amber-700 underline-offset-2 hover:underline dark:text-amber-300">
+          <Link href={ROUTES.admin.login} className="font-semibold text-amber-700 underline-offset-2 hover:underline dark:text-amber-300">
             Início de sessão
           </Link>
         </p>

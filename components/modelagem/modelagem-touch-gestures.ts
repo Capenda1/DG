@@ -2,6 +2,26 @@
 export const TOUCH_HIT_MIN_PX = 44;
 export const DESKTOP_HIT_MIN_PX = 22;
 
+/**
+ * Densidade do ecrã para o buffer do canvas.
+ * Sem isto, o canvas usa 1 CSS-pixel = 1 buffer-pixel e fica desfocado em
+ * telemóveis (DPR 2–3). Limite 3 evita buffers enormes em ecrãs 4×.
+ */
+export function getCanvasDpr(max = 3): number {
+  if (typeof window === "undefined") return 1;
+  const raw = window.devicePixelRatio || 1;
+  return Math.max(1, Math.min(max, raw));
+}
+
+/** Buffer interno (w×h) a partir do tamanho CSS do contentor. */
+export function canvasBufferSize(cssW: number, cssH: number, dpr = getCanvasDpr()) {
+  return {
+    w: Math.max(1, Math.round(cssW * dpr)),
+    h: Math.max(1, Math.round(cssH * dpr)),
+    dpr,
+  };
+}
+
 export type Point = { x: number; y: number };
 
 export function dist(a: Point, b: Point): number {

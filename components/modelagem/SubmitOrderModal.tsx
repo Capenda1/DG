@@ -1,6 +1,7 @@
 "use client";
 
 import { OrderCreationWizard } from "@/components/order/OrderCreationWizard";
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   getClientCheckoutPaymentSettings,
@@ -17,7 +18,7 @@ import {
   paymentMethodReadyForSubmit,
   paymentMethodSelectableInCheckout,
 } from "@/lib/payment-checkout-methods";
-import { isStaffRole } from "@/lib/routes";
+import { contaPedidoArtigosPath, isStaffRole } from "@/lib/routes";
 import { coerceFiniteNumber } from "@/lib/coerce-values";
 
 const CASH_METHOD: PaymentMethodValue = "CASH_ON_SITE";
@@ -507,7 +508,23 @@ export function SubmitOrderModal({
                 </>
               )}
             </p>
-            <OrderCreationWizard activeStep={3} className="mt-2 max-w-md" />
+            <OrderCreationWizard
+              activeStep={3}
+              step1Href={
+                isClient && order.status === "DRAFT"
+                  ? contaPedidoArtigosPath(order.id)
+                  : undefined
+              }
+              className="mt-2 max-w-md"
+            />
+            {isClient && order.status === "DRAFT" ? (
+              <Link
+                href={contaPedidoArtigosPath(order.id)}
+                className="mt-2 inline-flex text-[11px] font-semibold text-amber-300/95 underline decoration-amber-400/50 underline-offset-2 hover:text-amber-200"
+              >
+                ← Voltar a escolher os artigos
+              </Link>
+            ) : null}
           </div>
           {phase !== "success" ? (
             <button

@@ -16,7 +16,6 @@ import { SettingsModule } from './modules/settings/settings.module';
 import { InsumosModule } from './modules/insumos/insumos.module';
 import { ProductsModule } from './modules/products/products.module';
 import { PrismaModule } from './prisma/prisma.module';
-import { ImageToolsModule } from './modules/image-tools/image-tools.module';
 import { FinanceModule } from './modules/finance/finance.module';
 import { MailModule } from './modules/mail/mail.module';
 import { RhModule } from './modules/rh/rh.module';
@@ -46,7 +45,6 @@ import { OrderDocumentsModule } from './modules/order-documents/order-documents.
     MessagesModule,
     InsumosModule,
     ProductsModule,
-    ImageToolsModule,
     FinanceModule,
     MailModule,
     RhModule,

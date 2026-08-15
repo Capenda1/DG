@@ -26,6 +26,7 @@ import {
   CreateCounterOrderDto,
   QuickBalcaoClientDto,
 } from './dto/create-counter-order.dto';
+import { ReplaceCounterOrderItemsDto } from './dto/replace-counter-order-items.dto';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { SaveCompositionDto } from './dto/save-composition.dto';
 import { OrdersService, type MemoryUploadedFile } from './orders.service';
@@ -95,6 +96,28 @@ export class OrdersController {
     @Req() req: Request & { user: { id: string; role: UserRole } },
   ) {
     return this.ordersService.createCounterOrder(dto, req.user);
+  }
+
+  @Patch(':id/counter-items')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.ATTENDANT)
+  replaceCounterItems(
+    @Param('id') id: string,
+    @Body() dto: ReplaceCounterOrderItemsDto,
+    @Req() req: Request & { user: { id: string; role: UserRole } },
+  ) {
+    return this.ordersService.replaceCounterOrderItems(id, dto, req.user);
+  }
+
+  @Patch(':id/draft-items')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.CLIENT)
+  replaceClientDraftItems(
+    @Param('id') id: string,
+    @Body() dto: ReplaceCounterOrderItemsDto,
+    @Req() req: Request & { user: { id: string; role: UserRole } },
+  ) {
+    return this.ordersService.replaceClientDraftOrderItems(id, dto, req.user);
   }
 
   @Post()
@@ -271,7 +294,20 @@ export class OrdersController {
       dto.status,
       req.user,
       dto.paymentMethod,
+      dto.cancellationReason,
     );
+  }
+
+  /** Reverte o cancelamento, incluindo stock e lançamento financeiro compensatório. */
+  @Post(':id/reopen')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  reopenCancelledOrder(
+    @Param('id') id: string,
+    @Req() req: Request & { user: { id: string; role: UserRole } },
+    @Body() body: { reason?: string },
+  ) {
+    return this.ordersService.reopenCancelledOrder(id, req.user, body.reason);
   }
 
   @Delete(':id')
@@ -326,8 +362,7 @@ export class OrdersController {
       discountForSubmit = Math.round(n * 100) / 100;
     }
     const staffSubmit =
-      req.user.role === UserRole.ADMIN ||
-      req.user.role === UserRole.ATTENDANT;
+      req.user.role === UserRole.ADMIN || req.user.role === UserRole.ATTENDANT;
     let notesForSubmit: string | undefined;
     let receptionDateForSubmit: string | undefined;
     if (staffSubmit) {

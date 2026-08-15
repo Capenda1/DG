@@ -190,6 +190,28 @@ export function usePedidoGenericArtigos(catalog: CatalogProduct[] | null) {
 
 
 
+  const setLines = useCallback(
+
+    (
+
+      next:
+
+        | GenericLineForm[]
+
+        | ((prev: GenericLineForm[]) => GenericLineForm[]),
+
+    ) => {
+
+      setRawLines(next);
+
+    },
+
+    [],
+
+  );
+
+
+
   return {
 
     lines,
@@ -209,6 +231,8 @@ export function usePedidoGenericArtigos(catalog: CatalogProduct[] | null) {
     patchQty,
 
     resetLines,
+
+    setLines,
 
   };
 

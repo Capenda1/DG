@@ -1,9 +1,11 @@
 import { UserRole } from '@prisma/client';
 import {
+  IsBoolean,
   IsEmail,
   IsEnum,
   IsOptional,
   IsString,
+  Matches,
   MaxLength,
   MinLength,
   ValidateIf,
@@ -11,7 +13,10 @@ import {
 import { NormalizeEmailField } from '../../../common/email-transform.decorator';
 
 export class CreateUserDto {
-  @ValidateIf((o: CreateUserDto) => o.role !== UserRole.COLLABORATOR)
+  @ValidateIf(
+    (o: CreateUserDto) =>
+      o.role !== UserRole.COLLABORATOR && o.role !== UserRole.CLIENT,
+  )
   @NormalizeEmailField()
   @IsEmail()
   email?: string;
@@ -34,4 +39,17 @@ export class CreateUserDto {
   @IsString()
   @MaxLength(32)
   phone?: string;
+
+  @ValidateIf((o: CreateUserDto) => o.role === UserRole.CLIENT)
+  @IsBoolean()
+  @IsOptional()
+  isCompany?: boolean;
+
+  @ValidateIf(
+    (o: CreateUserDto) => o.role === UserRole.CLIENT && o.isCompany === true,
+  )
+  @IsString()
+  @MaxLength(32)
+  @Matches(/\S/, { message: 'O NIF é obrigatório para contas de empresa.' })
+  nif?: string;
 }

@@ -1,13 +1,14 @@
 "use client";
 
 import type { CSSProperties } from "react";
+import Link from "next/link";
 import { OrderCreationWizard } from "@/components/order/OrderCreationWizard";
 import { OrderPhaseStrip } from "@/components/order/OrderPhaseStrip";
 import { ModelagemExitLink } from "@/components/modelagem/ModelagemExitLink";
 import { orderStatusLabel } from "@/lib/order-status";
 import { isBalcaoInstantInsumosOrder } from "@/lib/order-line-meta";
 import type { OrderDetail } from "@/lib/api-client";
-import { contaPedidoPath } from "@/lib/routes";
+import { contaPedidoArtigosPath } from "@/lib/routes";
 
 function statusBadgeClass(status: string): string {
   switch (status) {
@@ -43,6 +44,8 @@ export function ModelagemPageHeader({
   refreshing,
   onRefresh,
   isClientOnlineDraft,
+  /** Telemóvel: barra mínima para maximizar a área de modelagem. */
+  compact = false,
 }: {
   order: OrderDetail;
   exitHref: string;
@@ -54,8 +57,64 @@ export function ModelagemPageHeader({
   refreshing?: boolean;
   onRefresh?: () => void;
   isClientOnlineDraft: boolean;
+  compact?: boolean;
 }) {
   const insumosOnly = isBalcaoInstantInsumosOrder(order);
+
+  if (compact) {
+    return (
+      <section
+        className="conta-animate-fade-up relative mb-1.5 overflow-hidden rounded-lg border border-zinc-200/80 bg-white/90 px-2.5 py-1.5 dark:border-white/[0.07] dark:bg-zinc-900/90"
+        style={{ "--conta-delay": "0ms" } as CSSProperties}
+      >
+        <div className="relative flex items-center gap-2">
+          <ModelagemExitLink
+            href={exitHref}
+            className="inline-flex h-9 shrink-0 items-center gap-1 rounded-lg px-1.5 text-[11px] font-semibold text-amber-700 transition hover:bg-amber-500/10 dark:text-amber-400"
+          >
+            <span aria-hidden>←</span>
+            <span className="max-w-[4.5rem] truncate">{exitLabel}</span>
+          </ModelagemExitLink>
+
+          <div className="min-w-0 flex-1">
+            <h1 className="truncate text-[13px] font-bold tracking-tight text-zinc-900 dark:text-white">
+              {order.orderNumber}
+            </h1>
+          </div>
+
+          {unsaved ? (
+            <span
+              className="shrink-0 rounded-md bg-amber-400/15 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800 ring-1 ring-amber-400/25 dark:text-amber-200"
+              role="status"
+            >
+              Por guardar
+            </span>
+          ) : null}
+
+          <span
+            className="h-3.5 w-3.5 shrink-0 rounded-sm ring-1 ring-zinc-400/40 dark:ring-zinc-600/50"
+            style={{ backgroundColor: baseColorHex }}
+            title={previewCaption}
+          />
+        </div>
+        {isClientOnlineDraft ? (
+          <div className="relative mt-1.5 space-y-1.5 border-t border-zinc-200/70 pt-1.5 dark:border-white/[0.06]">
+            <OrderCreationWizard
+              activeStep={2}
+              step1Href={contaPedidoArtigosPath(order.id)}
+              className="w-full"
+            />
+            <Link
+              href={contaPedidoArtigosPath(order.id)}
+              className="inline-flex text-[11px] font-semibold text-amber-700 underline decoration-amber-400/70 underline-offset-2 dark:text-amber-300"
+            >
+              ← Voltar a escolher os artigos
+            </Link>
+          </div>
+        ) : null}
+      </section>
+    );
+  }
 
   return (
     <section
@@ -118,6 +177,14 @@ export function ModelagemPageHeader({
               Cria a arte — depois submetes o pedido no passo 3.
             </p>
           ) : null}
+          {isClientOnlineDraft ? (
+            <Link
+              href={contaPedidoArtigosPath(order.id)}
+              className="mt-2 inline-flex text-[11px] font-semibold text-amber-700 underline decoration-amber-400/70 underline-offset-2 hover:text-amber-600 dark:text-amber-300"
+            >
+              ← Voltar a escolher os artigos
+            </Link>
+          ) : null}
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
@@ -147,7 +214,7 @@ export function ModelagemPageHeader({
       {showWizard ? (
         <OrderCreationWizard
           activeStep={2}
-          step1Href={isClientOnlineDraft ? contaPedidoPath(order.id) : undefined}
+          step1Href={isClientOnlineDraft ? contaPedidoArtigosPath(order.id) : undefined}
           className="relative mt-3"
         />
       ) : (

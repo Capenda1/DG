@@ -1,9 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { loginRequest, verifyMfaLoginRequest } from "@/lib/api-client";
+import {
+  loginRequest,
+  logoutRequest,
+  verifyMfaLoginRequest,
+} from "@/lib/api-client";
 import { consumeLoginFlashMessage, saveSession } from "@/lib/auth-session";
 import {
   dadivaBtnPrimaryAuth,
@@ -11,8 +15,18 @@ import {
   dadivaLabelAuth,
 } from "@/lib/dadiva-ui-classes";
 import { sanitizeLoginNextPath } from "@/lib/login-next-path";
-import { postLoginPath, ROUTES } from "@/lib/routes";
+import {
+  isStaffRole,
+  normalizeUserRole,
+  postLoginPath,
+  ROUTES,
+} from "@/lib/routes";
 import { normalizeEmail } from "@/lib/email";
+import {
+  angolaPhoneApiDigits,
+  formatWhatsAppMaskInput,
+  isAngolaPhoneComplete,
+} from "@/lib/whatsapp-mask";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
 import { LoginBackground } from "@/components/auth/LoginBackground";
 import {
@@ -39,6 +53,25 @@ function IconMail({ className }: { className?: string }) {
   );
 }
 
+function IconPhone({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      aria-hidden
+    >
+      <path
+        d="M7.2 3.5 4.7 5.1c-.8.5-1.1 1.5-.8 2.4 2 6.2 6.4 10.6 12.6 12.6.9.3 1.9 0 2.4-.8l1.6-2.5-4.2-2-1.3 1.7c-3.3-1.4-6.1-4.2-7.5-7.5l1.7-1.3-2-4.2Z"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function IconLock({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden>
@@ -49,8 +82,11 @@ function IconLock({ className }: { className?: string }) {
 }
 
 export default function LoginPage() {
+  const pathname = usePathname();
   const searchParams = useSearchParams();
+  const staffPortal = pathname === ROUTES.admin.login;
   const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -102,7 +138,21 @@ export default function LoginPage() {
   }, [loading]);
 
   async function finishLogin(session: { user: { role: string } }) {
-    const roleDefault = postLoginPath(session.user.role);
+    const role = normalizeUserRole(session.user.role);
+    const staffAccount = isStaffRole(role);
+    if (staffPortal !== staffAccount) {
+      await logoutRequest();
+      setMfaToken(null);
+      setMfaCode("");
+      setError(
+        staffPortal
+          ? "Esta entrada é exclusiva para utilizadores internos. Para uma conta de cliente, utiliza a Área do Cliente."
+          : "Esta conta pertence à equipa. Entra pela Área de Utilizadores.",
+      );
+      return;
+    }
+
+    const roleDefault = postLoginPath(role);
     if (roleDefault === ROUTES.login) {
       setError(
         "Este perfil não é reconhecido. O papel da conta deve ser CLIENT, ADMIN, DESIGNER ou ATTENDANT.",
@@ -111,7 +161,15 @@ export default function LoginPage() {
     }
     saveSession(session as Parameters<typeof saveSession>[0]);
     const nextParam = sanitizeLoginNextPath(searchParams.get("next"));
-    const dest = nextParam ?? roleDefault;
+    const nextMatchesArea = nextParam
+      ? staffPortal
+        ? nextParam === ROUTES.admin.root ||
+          nextParam.startsWith(`${ROUTES.admin.root}/`) ||
+          /^\/conta\/pedidos\/[^/]+\/modelagem\/?$/.test(nextParam)
+        : nextParam === ROUTES.account ||
+          nextParam.startsWith(`${ROUTES.account}/`)
+      : false;
+    const dest = nextMatchesArea ? nextParam! : roleDefault;
     window.location.assign(dest);
   }
 
@@ -125,7 +183,14 @@ export default function LoginPage() {
         await finishLogin(session);
         return;
       }
-      const result = await loginRequest(normalizeEmail(email), password);
+      if (!staffPortal && !isAngolaPhoneComplete(phone)) {
+        setError("Introduz um número de telefone angolano completo.");
+        return;
+      }
+      const identifier = staffPortal
+        ? { email: normalizeEmail(email) }
+        : { phone: angolaPhoneApiDigits(phone) };
+      const result = await loginRequest(identifier, password);
       if ("mfaRequired" in result && result.mfaRequired) {
         setMfaToken(result.mfaToken);
         setMfaCode("");
@@ -209,15 +274,21 @@ export default function LoginPage() {
                 {/* Badge da marca */}
                 <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-amber-400/50 bg-amber-50 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-amber-900 dark:border-amber-400/40 dark:bg-amber-400/10 dark:text-amber-300">
                   <IconSpark className="h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
-                  Dádiva Go
+                  {staffPortal ? "Dádiva Go · Utilizadores" : "Dádiva Go · Cliente"}
                 </div>
                 <h1 className="text-2xl font-bold tracking-tight text-zinc-900 sm:text-[1.7rem] dark:text-white">
-                  {mfaToken ? "Verificação em dois passos" : "Iniciar sessão"}
+                  {mfaToken
+                    ? "Verificação em dois passos"
+                    : staffPortal
+                      ? "Área de Utilizadores"
+                      : "Área do Cliente"}
                 </h1>
                 <p className="mt-2 max-w-md text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
                   {mfaToken
                     ? "Introduz o código da app autenticadora (ou um código de recuperação)."
-                    : "Utiliza o email e a palavra-passe da conta criada pelo administrador da plataforma."}
+                    : staffPortal
+                      ? "Acesso para administradores, designers e atendentes."
+                      : "Consulta os teus pedidos e acompanha o trabalho em curso."}
                 </p>
               </header>
 
@@ -258,29 +329,39 @@ export default function LoginPage() {
                       }}
                       className="mt-2 text-[11px] font-semibold text-zinc-500 underline-offset-2 hover:underline dark:text-zinc-400"
                     >
-                      Voltar ao email e palavra-passe
+                      Voltar ao {staffPortal ? "email" : "telefone"} e palavra-passe
                     </button>
                   </div>
                 ) : (
                   <>
                 <div>
-                  <label htmlFor="login-email" className={dadivaLabelAuth}>Email</label>
+                  <label htmlFor="login-identifier" className={dadivaLabelAuth}>
+                    {staffPortal ? "Email" : "Número de telefone"}
+                  </label>
                   <div className="relative">
-                    <IconMail className="pointer-events-none absolute left-3.5 top-1/2 h-5 w-5 -translate-y-1/2 text-zinc-400 dark:text-zinc-500" />
+                    {staffPortal ? (
+                      <IconMail className="pointer-events-none absolute left-3.5 top-1/2 h-5 w-5 -translate-y-1/2 text-zinc-400 dark:text-zinc-500" />
+                    ) : (
+                      <IconPhone className="pointer-events-none absolute left-3.5 top-1/2 h-5 w-5 -translate-y-1/2 text-zinc-400 dark:text-zinc-500" />
+                    )}
                     <input
-                      id="login-email"
-                      name="email"
-                      type="email"
-                      inputMode="email"
+                      id="login-identifier"
+                      name={staffPortal ? "email" : "phone"}
+                      type={staffPortal ? "email" : "tel"}
+                      inputMode={staffPortal ? "email" : "tel"}
                       autoComplete="username"
                       autoCapitalize="none"
                       autoCorrect="off"
                       spellCheck={false}
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
+                      value={staffPortal ? email : phone}
+                      onChange={(e) =>
+                        staffPortal
+                          ? setEmail(e.target.value)
+                          : setPhone(formatWhatsAppMaskInput(e.target.value))
+                      }
                       required
                       disabled={loading}
-                      placeholder="nome@empresa.com"
+                      placeholder={staffPortal ? "nome@empresa.com" : "+244 923 456 789"}
                       className={`${dadivaInputAuth} pl-11 pr-4`}
                     />
                   </div>
@@ -291,12 +372,14 @@ export default function LoginPage() {
                     <label htmlFor="login-password" className={dadivaLabelAuth}>
                       Palavra-passe
                     </label>
-                    <Link
-                      href={ROUTES.loginRecuperar}
-                      className="text-[11px] font-semibold text-amber-700 underline-offset-2 transition hover:underline dark:text-amber-300"
-                    >
-                      Recuperar acesso (admin)
-                    </Link>
+                    {staffPortal ? (
+                      <Link
+                        href={ROUTES.loginRecuperar}
+                        className="text-[11px] font-semibold text-amber-700 underline-offset-2 transition hover:underline dark:text-amber-300"
+                      >
+                        Recuperar acesso
+                      </Link>
+                    ) : null}
                   </div>
                   <div className="relative">
                     <IconLock className="pointer-events-none absolute left-3.5 top-1/2 h-5 w-5 -translate-y-1/2 text-zinc-400 dark:text-zinc-500" />
@@ -352,6 +435,26 @@ export default function LoginPage() {
                   )}
                 </button>
               </form>
+              {!mfaToken ? (
+                <div
+                  data-anime-login
+                  className="mt-6 border-t border-zinc-200/80 pt-5 text-center text-xs text-zinc-500 dark:border-white/10 dark:text-zinc-400"
+                >
+                  {staffPortal ? "És cliente?" : "Ainda não tens conta?"}{" "}
+                  <Link
+                    href={
+                      staffPortal
+                        ? ROUTES.clientLogin
+                        : ROUTES.clientRegister
+                    }
+                    className="font-semibold text-amber-700 underline-offset-2 hover:underline dark:text-amber-300"
+                  >
+                    {staffPortal
+                      ? "Ir para a Área do Cliente"
+                      : "Criar conta"}
+                  </Link>
+                </div>
+              ) : null}
             </div>
             </div>
           </div>

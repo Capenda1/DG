@@ -1,6 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useRegisterBottomBar } from "@/lib/app-bottom-bar";
 
 export type ModelagemSidePanelTab = "add" | "edit" | "layers";
 
@@ -68,6 +70,7 @@ export function ModelagemActionBar({
   onSaveTemplate,
   onSubmit,
   onContinueBalcao,
+  artigosHref,
 }: {
   saveDraftBusy: boolean;
   layersEmpty: boolean;
@@ -86,9 +89,13 @@ export function ModelagemActionBar({
   onSaveTemplate: () => void;
   onSubmit: () => void;
   onContinueBalcao: () => void;
+  /** Passo 2 · cliente online: ligar a «Escolher os artigos». */
+  artigosHref?: string | null;
 }) {
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
+  const barRef = useRef<HTMLDivElement>(null);
+  useRegisterBottomBar(barRef);
 
   useEffect(() => {
     if (!moreOpen) return;
@@ -102,7 +109,7 @@ export function ModelagemActionBar({
   }, [moreOpen]);
 
   return (
-    <div className="conta-animate-fade-up fixed inset-x-0 bottom-0 z-30 border-t border-zinc-200/90 bg-white/95 px-3 py-2.5 shadow-[0_-12px_40px_-20px_rgba(0,0,0,0.12)] backdrop-blur-md dark:border-zinc-800/80 dark:bg-zinc-950/95 dark:shadow-none sm:static sm:mt-3 sm:rounded-xl sm:border sm:px-4 sm:py-3" style={{ "--conta-delay": "200ms" } as CSSProperties}>
+    <div ref={barRef} className="conta-animate-fade-up fixed inset-x-0 bottom-0 z-30 border-t border-zinc-200/90 bg-white/95 px-3 py-2.5 shadow-[0_-12px_40px_-20px_rgba(0,0,0,0.12)] backdrop-blur-md dark:border-zinc-800/80 dark:bg-zinc-950/95 dark:shadow-none sm:static sm:mt-3 sm:rounded-xl sm:border sm:px-4 sm:py-3" style={{ "--conta-delay": "200ms" } as CSSProperties}>
       {(saveDraftOk || saveDraftErr || autoSaveLabel) && (
         <div className="mb-2 space-y-0.5">
           {autoSaveLabel ? (
@@ -125,6 +132,14 @@ export function ModelagemActionBar({
       )}
 
       <div className="mx-auto flex max-w-[1600px] items-stretch gap-2">
+        {artigosHref ? (
+          <Link
+            href={artigosHref}
+            className="inline-flex shrink-0 items-center justify-center rounded-xl border border-amber-400/45 bg-amber-400/10 px-3 py-2.5 text-xs font-bold text-amber-100 transition hover:bg-amber-400/20 sm:px-4"
+          >
+            ← Artigos
+          </Link>
+        ) : null}
         {!clientModelagemReadOnly ? (
           <button
             type="button"

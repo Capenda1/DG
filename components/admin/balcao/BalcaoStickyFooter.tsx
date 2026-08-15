@@ -1,5 +1,7 @@
 "use client";
 
+import { useRef } from "react";
+import { useRegisterBottomBar } from "@/lib/app-bottom-bar";
 import { formatMoney } from "@/lib/format-money";
 
 type Subtotals = {
@@ -20,6 +22,9 @@ type Props = {
   cashTurnBlocking: boolean;
   onContinue: () => void;
   onPause: () => void;
+  /** Quando se edita um rascunho já criado (voltar do passo 3). */
+  editingExistingDraft?: boolean;
+  onReturnToPayment?: () => void;
 };
 
 export function BalcaoStickyFooter({
@@ -31,7 +36,11 @@ export function BalcaoStickyFooter({
   cashTurnBlocking,
   onContinue,
   onPause,
+  editingExistingDraft = false,
+  onReturnToPayment,
 }: Props) {
+  const barRef = useRef<HTMLDivElement>(null);
+  useRegisterBottomBar(barRef);
   const { currency } = subtotals;
   const parts: { label: string; value: number }[] = [];
   if (subtotals.vestuario > 0) {
@@ -49,6 +58,7 @@ export function BalcaoStickyFooter({
 
   return (
     <div
+      ref={barRef}
       className="fixed inset-x-0 bottom-0 z-50 border-t border-zinc-200/95 bg-white/95 px-3 py-2.5 shadow-[0_-8px_32px_-12px_rgba(0,0,0,0.12)] backdrop-blur-md dark:border-zinc-600 dark:bg-zinc-950/95 dark:shadow-black/40 sm:px-4 sm:py-3"
       role="region"
       aria-label="Resumo e acções do pedido"
@@ -78,6 +88,16 @@ export function BalcaoStickyFooter({
           </p>
         </div>
         <div className="flex shrink-0 flex-col gap-2 sm:flex-row sm:items-center">
+          {editingExistingDraft && onReturnToPayment ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onReturnToPayment}
+              className="rounded-xl border border-zinc-300 bg-white px-4 py-2.5 text-xs font-bold text-zinc-800 transition hover:border-amber-400/50 disabled:pointer-events-none disabled:opacity-45 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100"
+            >
+              Voltar ao pagamento
+            </button>
+          ) : null}
           <button
             type="button"
             disabled={busy || !canAdvance || cashTurnBlocking}
@@ -85,8 +105,12 @@ export function BalcaoStickyFooter({
             className="rounded-xl bg-gradient-to-r from-amber-400 to-orange-500 px-5 py-3 text-sm font-extrabold text-black shadow-md shadow-amber-600/25 transition hover:from-amber-300 hover:to-orange-400 disabled:pointer-events-none disabled:opacity-45"
           >
             {busyAction === "continue" && busy
-              ? "A criar rascunho…"
-              : "Continuar para pagamento"}
+              ? editingExistingDraft
+                ? "A actualizar…"
+                : "A criar rascunho…"
+              : editingExistingDraft
+                ? "Guardar e continuar"
+                : "Continuar para pagamento"}
           </button>
           <button
             type="button"

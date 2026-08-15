@@ -32,6 +32,7 @@ import {
   formatWhatsAppMaskInput,
   isAngolaPhoneComplete,
 } from "@/lib/whatsapp-mask";
+import { useAnimatedConfirm } from "@/components/providers/AnimatedConfirmProvider";
 
 const ROLES: { value: UserRole; label: string }[] = [
   { value: "CLIENT", label: "Cliente" },
@@ -195,37 +196,37 @@ function ModalBackdrop({
 }) {
   const maxW = size === "lg" ? "max-w-lg" : "max-w-md";
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center p-4 sm:items-center sm:p-6">
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 sm:items-center sm:p-6">
       <button
         type="button"
         aria-label="Fechar"
-        className="absolute inset-0 bg-zinc-950/75 backdrop-blur-sm"
+        className="fixed inset-0 bg-zinc-950/75 backdrop-blur-sm"
         onClick={onClose}
       />
       <div
         role="dialog"
         aria-labelledby="modal-title"
-        className={`relative max-h-[min(90vh,720px)] w-full ${maxW} overflow-y-auto rounded-2xl border border-zinc-700/60 bg-zinc-900 shadow-2xl shadow-black/40`}
+        className={`relative my-2 flex max-h-[min(92vh,760px)] w-full ${maxW} flex-col overflow-hidden rounded-2xl border border-zinc-700/60 bg-zinc-900 shadow-2xl shadow-black/40 sm:my-0`}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="h-1 w-full bg-gradient-to-r from-amber-400 via-cyan-400 to-amber-500" />
-        <div className="p-6 sm:p-8">
-          <div className="mb-6 flex items-start justify-between gap-4">
-            <h2
-              id="modal-title"
-              className="text-lg font-semibold leading-snug tracking-tight text-white"
-            >
-              {title}
-            </h2>
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-lg leading-none text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-200"
-              aria-label="Fechar diálogo"
-            >
-              ×
-            </button>
-          </div>
+        <div className="h-1 w-full shrink-0 bg-gradient-to-r from-amber-400 via-cyan-400 to-amber-500" />
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-zinc-800/80 px-6 py-4 sm:px-8 sm:py-5">
+          <h2
+            id="modal-title"
+            className="text-lg font-semibold leading-snug tracking-tight text-white"
+          >
+            {title}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-lg leading-none text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-200"
+            aria-label="Fechar diálogo"
+          >
+            ×
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5 sm:px-8 sm:py-6">
           {children}
         </div>
       </div>
@@ -241,6 +242,8 @@ export function AdminUsersManager({
   variant: AdminUsersManagerVariant;
 }) {
   const searchParams = useSearchParams();
+  const confirmAction = useAnimatedConfirm();
+  const [statusBusyId, setStatusBusyId] = useState<string | null>(null);
   const listRole = useMemo((): UserRole | undefined => {
     if (variant === "clientes") {
       return "CLIENT";
@@ -268,6 +271,8 @@ export function AdminUsersManager({
   const [createCollaboratorFunction, setCreateCollaboratorFunction] =
     useState<CollaboratorFunctionId>("seguranca");
   const [createPhone, setCreatePhone] = useState("");
+  const [createIsCompany, setCreateIsCompany] = useState(false);
+  const [createNif, setCreateNif] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [createLoading, setCreateLoading] = useState(false);
@@ -280,6 +285,8 @@ export function AdminUsersManager({
   const [editEmail, setEditEmail] = useState("");
   const [editName, setEditName] = useState("");
   const [editPhone, setEditPhone] = useState("");
+  const [editIsCompany, setEditIsCompany] = useState(false);
+  const [editNif, setEditNif] = useState("");
   const [editRole, setEditRole] = useState<UserRole>("DESIGNER");
   const [editLoading, setEditLoading] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
@@ -314,6 +321,8 @@ export function AdminUsersManager({
       setEditEmail(editUser.email);
       setEditName(editUser.name);
       setEditPhone(displayPhoneAsMask(editUser.phone));
+      setEditIsCompany(editUser.clientType === "COMPANY");
+      setEditNif(editUser.nif ?? "");
       setEditRole(editUser.role as UserRole);
       setEditError(null);
     }
@@ -354,17 +363,27 @@ export function AdminUsersManager({
     setCreateError(null);
     setCreateLoading(true);
     try {
+      const role = variant === "clientes" ? "CLIENT" : createRole;
       const p = createPhone.trim();
+      if (role === "CLIENT" && !p) {
+        setCreateError("Indique o número de telefone do cliente.");
+        setCreateLoading(false);
+        return;
+      }
+      if (role === "CLIENT" && createIsCompany && !createNif.trim()) {
+        setCreateError("Indique o NIF da empresa.");
+        setCreateLoading(false);
+        return;
+      }
       if (p && !isAngolaPhoneComplete(p)) {
         setCreateError(PHONE_INCOMPLETE_MSG);
         setCreateLoading(false);
         return;
       }
 
-      const role = variant === "clientes" ? "CLIENT" : createRole;
       const isCollaborator = isCollaboratorRole(role);
 
-      if (!isCollaborator) {
+      if (!isCollaborator && role !== "CLIENT") {
         const normalizedEmail = normalizeEmail(createEmail);
         if (!normalizedEmail) {
           setCreateError("Indique o email.");
@@ -387,11 +406,20 @@ export function AdminUsersManager({
       }
 
       const result = await createUserAsAdmin({
-        email: isCollaborator ? undefined : normalizeEmail(createEmail),
+        email:
+          isCollaborator || role === "CLIENT"
+            ? undefined
+            : normalizeEmail(createEmail),
         name: createName.trim(),
         password: isCollaborator ? undefined : createPassword,
         role,
         phone: p ? angolaPhoneApiDigits(p) : undefined,
+        ...(role === "CLIENT"
+          ? {
+              isCompany: createIsCompany,
+              ...(createIsCompany ? { nif: createNif.trim() } : {}),
+            }
+          : {}),
       });
 
       if (isCollaborator) {
@@ -408,6 +436,10 @@ export function AdminUsersManager({
         setCreateSuccessBanner(
           `Colaborador registado: ${result.user.name} (${roleLabel(result.user.role)}). Aparece no RH — sem acesso ao sistema.`,
         );
+      } else if (role === "CLIENT") {
+        setCreateSuccessBanner(
+          `Cliente criado: ${result.user.name}${result.user.phone ? ` · ${result.user.phone}` : ""}.`,
+        );
       } else {
         setCreateSuccessBanner(
           `Conta criada: ${result.user.email} (${roleLabel(result.user.role)}). Envie a palavra-passe por um canal seguro.`,
@@ -418,6 +450,8 @@ export function AdminUsersManager({
       setCreateName("");
       setCreatePassword("");
       setCreatePhone("");
+      setCreateIsCompany(false);
+      setCreateNif("");
       setCreateCollaboratorFunction("seguranca");
       setCreateRole(
         variant === "clientes" ? "CLIENT" : (listRole ?? "DESIGNER"),
@@ -440,7 +474,7 @@ export function AdminUsersManager({
     setEditLoading(true);
     try {
       const body: Parameters<typeof updateUserAsAdmin>[1] = {};
-      if (editEmail.trim() !== editUser.email) {
+      if (variant !== "clientes" && editEmail.trim() !== editUser.email) {
         const normalizedEmail = normalizeEmail(editEmail);
         const emailCheck = await checkAdminUserEmailAvailability(
           normalizedEmail,
@@ -459,6 +493,16 @@ export function AdminUsersManager({
         body.name = editName.trim();
       }
       const p = editPhone.trim();
+      if (editUser.role === "CLIENT" && !p) {
+        setEditError("O telefone é obrigatório para o login do cliente.");
+        setEditLoading(false);
+        return;
+      }
+      if (editUser.role === "CLIENT" && editIsCompany && !editNif.trim()) {
+        setEditError("O NIF é obrigatório para contas de empresa.");
+        setEditLoading(false);
+        return;
+      }
       if (p && !isAngolaPhoneComplete(p)) {
         setEditError(PHONE_INCOMPLETE_MSG);
         setEditLoading(false);
@@ -468,6 +512,21 @@ export function AdminUsersManager({
       const prevPhoneDigits = angolaPhoneNormalizedStored(editUser.phone);
       if (nextPhoneDigits !== prevPhoneDigits) {
         body.phone = nextPhoneDigits;
+      }
+      if (editUser.role === "CLIENT") {
+        const wasCompany = editUser.clientType === "COMPANY";
+        if (editIsCompany !== wasCompany) {
+          body.isCompany = editIsCompany;
+        }
+        if (editIsCompany) {
+          const nextNif = editNif.trim();
+          if (nextNif !== (editUser.nif ?? "").trim() || !wasCompany) {
+            body.isCompany = true;
+            body.nif = nextNif;
+          }
+        } else if (wasCompany) {
+          body.isCompany = false;
+        }
       }
       if (variant !== "clientes" && editRole !== editUser.role) {
         body.role = editRole;
@@ -534,6 +593,34 @@ export function AdminUsersManager({
       setDelError(err instanceof Error ? err.message : "Erro ao eliminar.");
     } finally {
       setDelLoading(false);
+    }
+  }
+
+  async function handleToggleClientActive(user: AdminUserListItem) {
+    if (user.role !== "CLIENT") return;
+    const nextActive = user.active === false;
+    const ok = await confirmAction({
+      title: nextActive ? "Activar cliente" : "Desactivar cliente",
+      message: nextActive
+        ? `Activar «${user.name}»? O cliente volta a poder iniciar sessão.`
+        : `Desactivar «${user.name}»? O cliente deixa de poder iniciar sessão e as sessões activas são terminadas.`,
+      confirmLabel: nextActive ? "Activar" : "Desactivar",
+      cancelLabel: "Cancelar",
+    });
+    if (!ok) return;
+    setStatusBusyId(user.id);
+    setListError(null);
+    try {
+      await updateUserAsAdmin(user.id, { active: nextActive });
+      await reloadUsers();
+    } catch (err) {
+      setListError(
+        err instanceof Error
+          ? err.message
+          : "Não foi possível actualizar o estado do cliente.",
+      );
+    } finally {
+      setStatusBusyId(null);
     }
   }
 
@@ -714,7 +801,11 @@ export function AdminUsersManager({
                     type="search"
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Nome ou email…"
+                    placeholder={
+                      variant === "clientes"
+                        ? "Nome, telefone ou NIF…"
+                        : "Nome ou email…"
+                    }
                     className={`${inputClass} pl-12`}
                   />
                 </div>
@@ -764,10 +855,22 @@ export function AdminUsersManager({
                   <thead>
                     <tr className="border-b border-zinc-800/90 bg-zinc-900/50 text-[11px] font-semibold uppercase tracking-[0.12em] text-zinc-500">
                       <th className="px-5 py-4 font-medium md:px-6">Nome</th>
-                      <th className="px-5 py-4 font-medium md:px-6">Email</th>
+                      {variant !== "clientes" ? (
+                        <th className="px-5 py-4 font-medium md:px-6">Email</th>
+                      ) : null}
                       {variant !== "clientes" ? (
                         <th className="px-5 py-4 font-medium md:px-6">
                           Perfil
+                        </th>
+                      ) : null}
+                      {isClientView ? (
+                        <th className="px-5 py-4 font-medium md:px-6">
+                          Tipo
+                        </th>
+                      ) : null}
+                      {isClientView ? (
+                        <th className="px-5 py-4 font-medium md:px-6">
+                          Estado
                         </th>
                       ) : null}
                       {isClientView ? (
@@ -808,12 +911,45 @@ export function AdminUsersManager({
                               </span>
                             ) : null}
                           </td>
-                          <td className="px-5 py-4 text-zinc-300 md:px-6">
-                            {displayUserEmail(u)}
-                          </td>
+                          {variant !== "clientes" ? (
+                            <td className="px-5 py-4 text-zinc-300 md:px-6">
+                              {displayUserEmail(u)}
+                            </td>
+                          ) : null}
                           {variant !== "clientes" ? (
                             <td className="px-5 py-4 md:px-6">
                               <RoleBadge role={u.role} />
+                            </td>
+                          ) : null}
+                          {isClientView ? (
+                            <td className="px-5 py-4 text-zinc-300 md:px-6">
+                              {u.clientType === "COMPANY" ? (
+                                <span className="block">
+                                  <span className="font-medium text-amber-200">
+                                    Jurídica
+                                  </span>
+                                  {u.nif ? (
+                                    <span className="mt-0.5 block text-[11px] text-zinc-500">
+                                      NIF {u.nif}
+                                    </span>
+                                  ) : null}
+                                </span>
+                              ) : (
+                                "Física"
+                              )}
+                            </td>
+                          ) : null}
+                          {isClientView ? (
+                            <td className="px-5 py-4 md:px-6">
+                              {u.active === false ? (
+                                <span className="inline-flex rounded-md bg-red-500/15 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-red-300 ring-1 ring-red-400/20">
+                                  Inactivo
+                                </span>
+                              ) : (
+                                <span className="inline-flex rounded-md bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-emerald-300 ring-1 ring-emerald-400/20">
+                                  Activo
+                                </span>
+                              )}
                             </td>
                           ) : null}
                           {isClientView ? (
@@ -836,6 +972,24 @@ export function AdminUsersManager({
                               >
                                 Editar
                               </button>
+                              {isClientView ? (
+                                <button
+                                  type="button"
+                                  disabled={statusBusyId === u.id}
+                                  onClick={() => void handleToggleClientActive(u)}
+                                  className={
+                                    u.active === false
+                                      ? "rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-200 transition hover:bg-emerald-500/20 disabled:opacity-50"
+                                      : "rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-200 transition hover:bg-amber-500/20 disabled:opacity-50"
+                                  }
+                                >
+                                  {statusBusyId === u.id
+                                    ? "A actualizar…"
+                                    : u.active === false
+                                      ? "Activar"
+                                      : "Desactivar"}
+                                </button>
+                              ) : null}
                               <button
                                 type="button"
                                 onClick={() => {
@@ -929,7 +1083,9 @@ export function AdminUsersManager({
                 htmlFor="create-name"
                 className={`mb-2 block ${labelUi}`}
               >
-                Nome
+                {variant === "clientes" && createIsCompany
+                  ? "Nome da empresa"
+                  : "Nome"}
               </label>
               <input
                 id="create-name"
@@ -941,6 +1097,55 @@ export function AdminUsersManager({
                 className={inputClass}
               />
             </div>
+            {variant === "clientes" ? (
+              <>
+                <label className="flex cursor-pointer items-center justify-between gap-4 rounded-xl border border-zinc-700/70 bg-zinc-900/50 px-4 py-3.5">
+                  <span>
+                    <span className="block text-sm font-semibold text-zinc-100">
+                      Conta de empresa
+                    </span>
+                    <span className="mt-0.5 block text-[11px] text-zinc-500">
+                      Activa para cadastrar uma pessoa jurídica.
+                    </span>
+                  </span>
+                  <span className="relative inline-flex shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={createIsCompany}
+                      onChange={(e) => {
+                        setCreateIsCompany(e.target.checked);
+                        if (!e.target.checked) setCreateNif("");
+                      }}
+                      disabled={createLoading}
+                      className="peer sr-only"
+                    />
+                    <span className="h-6 w-11 rounded-full bg-zinc-700 transition peer-checked:bg-amber-500 peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-amber-500" />
+                    <span className="pointer-events-none absolute left-1 top-1 h-4 w-4 rounded-full bg-white shadow-sm transition peer-checked:translate-x-5" />
+                  </span>
+                </label>
+                {createIsCompany ? (
+                  <div>
+                    <label
+                      htmlFor="create-nif"
+                      className={`mb-2 block ${labelUi}`}
+                    >
+                      NIF da empresa
+                    </label>
+                    <input
+                      id="create-nif"
+                      type="text"
+                      inputMode="numeric"
+                      value={createNif}
+                      onChange={(e) => setCreateNif(e.target.value)}
+                      required
+                      maxLength={32}
+                      className={inputClass}
+                      placeholder="Número de identificação fiscal"
+                    />
+                  </div>
+                ) : null}
+              </>
+            ) : null}
             {variant !== "clientes" ? (
               <div>
                 <label
@@ -999,27 +1204,28 @@ export function AdminUsersManager({
               </>
             ) : (
               <>
-                <div>
-                  <label
-                    htmlFor="create-email"
-                    className={`mb-2 block ${labelUi}`}
-                  >
-                    Email
-                  </label>
-                  <input
-                    id="create-email"
-                    type="email"
-                    autoComplete="off"
-                    value={createEmail}
-                    onChange={(e) => setCreateEmail(e.target.value)}
-                    required
-                    className={inputClass}
-                  />
-                  <p className="mt-1.5 text-[11px] leading-snug text-zinc-500">
-                    O email é único em toda a plataforma — não pode repetir-se
-                    entre cliente, administrador ou equipa.
-                  </p>
-                </div>
+                {variant !== "clientes" ? (
+                  <div>
+                    <label
+                      htmlFor="create-email"
+                      className={`mb-2 block ${labelUi}`}
+                    >
+                      Email
+                    </label>
+                    <input
+                      id="create-email"
+                      type="email"
+                      autoComplete="off"
+                      value={createEmail}
+                      onChange={(e) => setCreateEmail(e.target.value)}
+                      required
+                      className={inputClass}
+                    />
+                    <p className="mt-1.5 text-[11px] leading-snug text-zinc-500">
+                      O email é único em toda a plataforma.
+                    </p>
+                  </div>
+                ) : null}
                 <div>
                   <span className={`mb-2 block ${labelUi}`}>
                     Palavra-passe inicial
@@ -1051,7 +1257,7 @@ export function AdminUsersManager({
               >
                 Telefone{" "}
                 <span className="font-normal normal-case tracking-normal text-zinc-600">
-                  (opcional)
+                  {variant === "clientes" ? "(usado no login)" : "(opcional)"}
                 </span>
               </label>
               <input
@@ -1064,6 +1270,7 @@ export function AdminUsersManager({
                   setCreatePhone(formatWhatsAppMaskInput(e.target.value))
                 }
                 maxLength={18}
+                required={variant === "clientes"}
                 placeholder="+244 9XX XXX XXX"
                 className={inputClass}
               />
@@ -1119,7 +1326,7 @@ export function AdminUsersManager({
                 </Link>
                 . Para dar login, altere o perfil para Atendente, Designer ou Admin.
               </p>
-            ) : (
+            ) : variant !== "clientes" ? (
               <div>
                 <span className={`mb-2 block ${labelUi}`}>Email</span>
                 <input
@@ -1134,9 +1341,13 @@ export function AdminUsersManager({
                   outra conta (cliente, admin ou equipa).
                 </p>
               </div>
-            )}
+            ) : null}
             <div>
-              <span className={`mb-2 block ${labelUi}`}>Nome</span>
+              <span className={`mb-2 block ${labelUi}`}>
+                {editUser.role === "CLIENT" && editIsCompany
+                  ? "Nome da empresa"
+                  : "Nome"}
+              </span>
               <input
                 type="text"
                 value={editName}
@@ -1146,6 +1357,49 @@ export function AdminUsersManager({
                 className={inputClass}
               />
             </div>
+            {editUser.role === "CLIENT" ? (
+              <>
+                <label className="flex cursor-pointer items-center justify-between gap-4 rounded-xl border border-zinc-700/70 bg-zinc-900/50 px-4 py-3.5">
+                  <span>
+                    <span className="block text-sm font-semibold text-zinc-100">
+                      Conta de empresa
+                    </span>
+                    <span className="mt-0.5 block text-[11px] text-zinc-500">
+                      Activa para pessoa jurídica com NIF obrigatório.
+                    </span>
+                  </span>
+                  <span className="relative inline-flex shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={editIsCompany}
+                      onChange={(e) => {
+                        setEditIsCompany(e.target.checked);
+                        if (!e.target.checked) setEditNif("");
+                      }}
+                      disabled={editLoading}
+                      className="peer sr-only"
+                    />
+                    <span className="h-6 w-11 rounded-full bg-zinc-700 transition peer-checked:bg-amber-500 peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-amber-500" />
+                    <span className="pointer-events-none absolute left-1 top-1 h-4 w-4 rounded-full bg-white shadow-sm transition peer-checked:translate-x-5" />
+                  </span>
+                </label>
+                {editIsCompany ? (
+                  <div>
+                    <span className={`mb-2 block ${labelUi}`}>NIF da empresa</span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={editNif}
+                      onChange={(e) => setEditNif(e.target.value)}
+                      required
+                      maxLength={32}
+                      className={inputClass}
+                      placeholder="Número de identificação fiscal"
+                    />
+                  </div>
+                ) : null}
+              </>
+            ) : null}
             <div>
               <span className={`mb-2 block ${labelUi}`}>Telefone</span>
               <input
@@ -1157,11 +1411,15 @@ export function AdminUsersManager({
                   setEditPhone(formatWhatsAppMaskInput(e.target.value))
                 }
                 maxLength={18}
+                required={editUser.role === "CLIENT"}
                 placeholder="+244 9XX XXX XXX"
                 className={inputClass}
               />
               <p className="mt-1.5 text-[11px] leading-snug text-zinc-500">
-                {PHONE_HINT} Vazio remove o telefone.
+                {PHONE_HINT}{" "}
+                {editUser.role === "CLIENT"
+                  ? "Este número é usado no login."
+                  : "Vazio remove o telefone."}
               </p>
             </div>
             {variant !== "clientes" ? (
@@ -1268,8 +1526,17 @@ export function AdminUsersManager({
         >
           <p className="text-sm leading-relaxed text-zinc-300">
             Tem a certeza que pretende eliminar{" "}
-            <span className="font-semibold text-white">{delUser.name}</span>{" "}
-            <span className="text-zinc-500">({delUser.email})</span>?
+            <span className="font-semibold text-white">{delUser.name}</span>
+            {variant === "clientes"
+              ? delUser.phone
+                ? <>{" "}
+                    <span className="text-zinc-500">({delUser.phone})</span>
+                  </>
+                : null
+              : <>{" "}
+                  <span className="text-zinc-500">({delUser.email})</span>
+                </>}
+            ?
           </p>
           <p className="mt-4 rounded-xl border border-zinc-700/60 bg-zinc-800/30 px-4 py-3 text-sm leading-relaxed text-zinc-500">
             Só é possível eliminar contas sem pedidos, arte, anotações ou outras

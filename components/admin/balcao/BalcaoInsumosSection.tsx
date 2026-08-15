@@ -1,8 +1,9 @@
 "use client";
 
-import { memo } from "react";
+import { memo, useMemo } from "react";
 import type { CounterInsumoListItem } from "@/lib/api-client";
 import { BalcaoInsumoPicker } from "@/components/admin/balcao/BalcaoInsumoPicker";
+import { useCollapsiblePedidoLines } from "@/components/pedidos/useCollapsiblePedidoLines";
 import { balcaoPdvCard } from "@/lib/balcao-pdv-ui";
 import { formatMoney } from "@/lib/format-money";
 import {
@@ -43,6 +44,12 @@ function BalcaoInsumosSectionInner({
   onPatchQty,
   embedded = false,
 }: Props) {
+  const lineIds = useMemo(() => rows.map((r) => r.id), [rows]);
+  const { isExpanded, expand, collapseActive } = useCollapsiblePedidoLines(
+    lineIds,
+    embedded,
+  );
+
   const body = (
     <>
       {insumosErr ? (
@@ -71,67 +78,111 @@ function BalcaoInsumosSectionInner({
                 : Number.isFinite(unitFromProduct) && unitFromProduct > 0
                   ? formatMoney(unitFromProduct, currency)
                   : "Sem preço";
+            const expanded = isExpanded(row.id);
+            const summary =
+              insumoSel?.nome?.trim() ||
+              (row.insumoId ? "Produto seleccionado" : null);
+            const qtyNum = parseInt(row.qty.replace(/\D/g, ""), 10) || 0;
 
             return (
               <li
                 key={row.id}
-                className="rounded-lg border border-zinc-200/90 bg-white p-3 dark:border-zinc-600 dark:bg-zinc-800/60"
+                className={
+                  collapseActive && !expanded
+                    ? "rounded-lg border border-zinc-200/90 bg-white px-3 py-2.5 dark:border-zinc-600 dark:bg-zinc-800/60"
+                    : "rounded-lg border border-zinc-200/90 bg-white p-3 dark:border-zinc-600 dark:bg-zinc-800/60"
+                }
               >
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <span className="text-[11px] font-bold uppercase text-zinc-500">
-                    Linha {idx + 1}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => onRemoveRow(row.id)}
-                    className="text-[10px] font-bold text-red-700 dark:text-red-400"
-                  >
-                    Remover
-                  </button>
-                </div>
-                <div className="grid gap-2 sm:grid-cols-12">
-                  <div className="sm:col-span-6">
-                    <label
-                      className={dadivaLabelCompact}
-                      htmlFor={`balcao-insumo-${row.id}`}
+                <div
+                  className={`flex items-center justify-between gap-2 ${expanded ? "mb-2" : ""}`}
+                >
+                  {collapseActive ? (
+                    <button
+                      type="button"
+                      onClick={() => expand(row.id)}
+                      className="min-w-0 flex-1 text-left"
+                      aria-expanded={expanded}
                     >
-                      Produto
-                    </label>
-                    <BalcaoInsumoPicker
-                      id={`balcao-insumo-${row.id}`}
-                      value={row.insumoId}
-                      onChange={(id) => onSelectProduct(row.id, id)}
-                      rows={insumos}
-                      disabled={insumos.length === 0}
-                    />
-                  </div>
-                  <div className="sm:col-span-3">
-                    <label className={dadivaLabelCompact}>Qtd</label>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      value={row.qty}
-                      onChange={(e) =>
-                        onPatchQty(
-                          row.id,
-                          sanitizeUnsignedIntString(e.target.value),
-                        )
-                      }
-                      className={`${dadivaInput} mt-1 !py-2`}
-                      placeholder="0"
-                    />
-                  </div>
-                  <div className="sm:col-span-3">
-                    <label className={dadivaLabelCompact}>Preço un.</label>
-                    <input
-                      type="text"
-                      readOnly
-                      tabIndex={-1}
-                      value={unitLabel}
-                      className={`${dadivaInputReadonly} ${dadivaInput} mt-1 !py-2`}
-                    />
+                      <span className="text-[11px] font-bold uppercase text-zinc-500">
+                        Linha {idx + 1}
+                        {!expanded ? (
+                          <span className="ml-2 font-semibold normal-case tracking-normal text-zinc-700 dark:text-zinc-300">
+                            {summary
+                              ? `· ${summary}${qtyNum > 0 ? ` × ${qtyNum}` : ""}`
+                              : "· Minimizado — tocar para editar"}
+                          </span>
+                        ) : null}
+                      </span>
+                    </button>
+                  ) : (
+                    <span className="text-[11px] font-bold uppercase text-zinc-500">
+                      Linha {idx + 1}
+                    </span>
+                  )}
+                  <div className="flex shrink-0 items-center gap-2">
+                    {collapseActive && !expanded ? (
+                      <button
+                        type="button"
+                        onClick={() => expand(row.id)}
+                        className="text-[10px] font-bold text-violet-700 dark:text-violet-300"
+                      >
+                        Editar
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => onRemoveRow(row.id)}
+                      className="text-[10px] font-bold text-red-700 dark:text-red-400"
+                    >
+                      Remover
+                    </button>
                   </div>
                 </div>
+                {expanded ? (
+                  <div className="grid gap-2 sm:grid-cols-12">
+                    <div className="sm:col-span-6">
+                      <label
+                        className={dadivaLabelCompact}
+                        htmlFor={`balcao-insumo-${row.id}`}
+                      >
+                        Produto
+                      </label>
+                      <BalcaoInsumoPicker
+                        id={`balcao-insumo-${row.id}`}
+                        value={row.insumoId}
+                        onChange={(id) => onSelectProduct(row.id, id)}
+                        rows={insumos}
+                        disabled={insumos.length === 0}
+                      />
+                    </div>
+                    <div className="sm:col-span-3">
+                      <label className={dadivaLabelCompact}>Qtd</label>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={row.qty}
+                        onChange={(e) =>
+                          onPatchQty(
+                            row.id,
+                            sanitizeUnsignedIntString(e.target.value),
+                          )
+                        }
+                        className={`${dadivaInput} mt-1 !py-2`}
+                        placeholder="0"
+                      />
+                    </div>
+                    <div className="sm:col-span-3">
+                      <label className={dadivaLabelCompact}>Preço un.</label>
+                      <input
+                        type="text"
+                        readOnly
+                        tabIndex={-1}
+                        value={unitLabel}
+                        className={`${dadivaInputReadonly} ${dadivaInput} mt-1 !py-2`}
+                      />
+                    </div>
+                  </div>
+                ) : null}
               </li>
             );
           })}

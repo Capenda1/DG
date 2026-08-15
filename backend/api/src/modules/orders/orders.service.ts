@@ -30,6 +30,7 @@ import type {
   CreateCounterOrderDto,
   QuickBalcaoClientDto,
 } from './dto/create-counter-order.dto';
+import type { ReplaceCounterOrderItemsDto } from './dto/replace-counter-order-items.dto';
 import type {
   CreateOrderDto,
   CreateOrderLineDto,
@@ -145,7 +146,8 @@ export class OrdersService {
     [OrderStatus.APPROVED]: [OrderStatus.IN_PRODUCTION, OrderStatus.CANCELLED],
     [OrderStatus.IN_PRODUCTION]: [OrderStatus.FINISHED, OrderStatus.CANCELLED],
     [OrderStatus.FINISHED]: [OrderStatus.DELIVERED, OrderStatus.CANCELLED],
-    [OrderStatus.DELIVERED]: [],
+    /** Admin pode anular uma venda de balcão já entregue; clientes continuam bloqueados. */
+    [OrderStatus.DELIVERED]: [OrderStatus.CANCELLED],
     [OrderStatus.CANCELLED]: [],
   };
 
@@ -263,10 +265,20 @@ export class OrdersService {
 
   private orderDetailInclude() {
     return {
-      client: { select: { id: true, email: true, name: true, phone: true } },
+      client: {
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          phone: true,
+          clientType: true,
+          nif: true,
+        },
+      },
       designer: { select: { id: true, email: true, name: true } },
       attendant: { select: { id: true, email: true, name: true } },
       deliveredBy: { select: { id: true, email: true, name: true } },
+      cancelledBy: { select: { id: true, email: true, name: true } },
       items: { orderBy: { id: 'asc' as const } },
       _count: { select: { items: true, artVersions: true } },
       /** Versões recentes da modelagem (para reabrir o editor mesmo se a última gravação veio só com PNG). */
@@ -543,13 +555,16 @@ export class OrdersService {
     const row = await this.users.createBalcaoClient({
       name,
       phone: dto.phone?.trim() ? dto.phone.trim() : null,
-      email: dto.email?.trim() ? dto.email.trim().toLowerCase() : null,
+      isCompany: dto.isCompany === true,
+      nif: dto.nif,
     });
     return {
       id: row.id,
       email: row.email,
       name: row.name,
       phone: row.phone,
+      clientType: row.clientType,
+      nif: row.nif,
       createdAt: row.createdAt.toISOString(),
     };
   }
@@ -580,11 +595,13 @@ export class OrdersService {
     let clientId: string;
     if (dto.clientId) {
       const u = await this.prisma.user.findFirst({
-        where: { id: dto.clientId, role: UserRole.CLIENT },
+        where: { id: dto.clientId, role: UserRole.CLIENT, active: true },
         select: { id: true },
       });
       if (!u) {
-        throw new BadRequestException('Cliente não encontrado ou inválido.');
+        throw new BadRequestException(
+          'Cliente não encontrado, inválido ou desactivado.',
+        );
       }
       clientId = u.id;
     } else {
@@ -592,7 +609,8 @@ export class OrdersService {
       const created = await this.users.createBalcaoClient({
         name: qc.name,
         phone: qc.phone,
-        email: qc.email,
+        isCompany: qc.isCompany === true,
+        nif: qc.nif,
       });
       clientId = created.id;
     }
@@ -638,6 +656,150 @@ export class OrdersService {
           orderOrigin: 'BALCAO',
           clientId,
           channel: 'counter_draft',
+          grossSubtotal: gross,
+        },
+      },
+    });
+
+    return order;
+  }
+
+  /**
+   * Substitui as linhas de um rascunho de balcão (voltar ao passo 1 e alterar artigos).
+   * Mantém o mesmo pedido, cliente e número.
+   */
+  async replaceCounterOrderItems(
+    orderId: string,
+    dto: ReplaceCounterOrderItemsDto,
+    actor: { id: string; role: UserRole },
+  ) {
+    return this.replaceDraftOrderItems(orderId, dto, actor, {
+      channel: 'BALCAO',
+    });
+  }
+
+  /**
+   * Cliente online: substitui artigos do próprio rascunho ONLINE.
+   */
+  async replaceClientDraftOrderItems(
+    orderId: string,
+    dto: ReplaceCounterOrderItemsDto,
+    actor: { id: string; role: UserRole },
+  ) {
+    return this.replaceDraftOrderItems(orderId, dto, actor, {
+      channel: 'ONLINE_CLIENT',
+    });
+  }
+
+  private async replaceDraftOrderItems(
+    orderId: string,
+    dto: ReplaceCounterOrderItemsDto,
+    actor: { id: string; role: UserRole },
+    opts: { channel: 'BALCAO' | 'ONLINE_CLIENT' },
+  ) {
+    const balcao = opts.channel === 'BALCAO';
+    if (balcao) {
+      if (actor.role !== UserRole.ADMIN && actor.role !== UserRole.ATTENDANT) {
+        throw new ForbiddenException(
+          'Sem permissão para editar pedidos de balcão.',
+        );
+      }
+      await this.finance.ensureBalcaoCashSessionIsOpen();
+    } else if (actor.role !== UserRole.CLIENT) {
+      throw new ForbiddenException(
+        'Sem permissão para editar este pedido.',
+      );
+    }
+
+    const existing = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        id: true,
+        status: true,
+        orderOrigin: true,
+        attendantId: true,
+        clientId: true,
+        orderNumber: true,
+      },
+    });
+    if (!existing) {
+      throw new NotFoundException('Pedido não encontrado.');
+    }
+    if (existing.status !== OrderStatus.DRAFT) {
+      throw new BadRequestException(
+        'Só é possível alterar artigos de pedidos em rascunho.',
+      );
+    }
+    if (balcao) {
+      if (existing.orderOrigin !== OrderOrigin.BALCAO) {
+        throw new BadRequestException(
+          'Só pedidos de balcão podem ser editados neste fluxo.',
+        );
+      }
+      if (
+        actor.role === UserRole.ATTENDANT &&
+        existing.attendantId != null &&
+        existing.attendantId !== actor.id
+      ) {
+        throw new ForbiddenException(
+          'Este rascunho pertence a outro atendente.',
+        );
+      }
+    } else {
+      if (existing.orderOrigin !== OrderOrigin.ONLINE) {
+        throw new BadRequestException(
+          'Só pedidos online em rascunho podem ser editados neste fluxo.',
+        );
+      }
+      if (existing.clientId !== actor.id) {
+        throw new ForbiddenException(
+          'Só podes editar os teus próprios pedidos.',
+        );
+      }
+    }
+
+    const { lineData, orderCurrency } = await this.buildOrderItemsFromLines(
+      dto.items,
+      { allowInsumoLines: balcao },
+    );
+    let gross = 0;
+    for (const line of lineData) {
+      const qty = line.quantity ?? 0;
+      gross += Number(line.unitPrice) * qty;
+    }
+    gross = Math.round(gross * 100) / 100;
+
+    const order = await this.prisma.$transaction(async (tx) => {
+      await tx.orderItem.deleteMany({ where: { orderId } });
+      return tx.order.update({
+        where: { id: orderId },
+        data: {
+          totalAmount: new Prisma.Decimal(gross),
+          discountAmount: new Prisma.Decimal(0),
+          ...(orderCurrency ? { currency: orderCurrency } : {}),
+          ...(dto.notes !== undefined
+            ? { notes: dto.notes.trim() ? dto.notes.trim() : null }
+            : {}),
+          items: { create: lineData },
+        },
+        include: this.orderDetailInclude(),
+      });
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        entityType: 'Order',
+        entityId: order.id,
+        orderId: order.id,
+        action: AuditAction.UPDATE,
+        userId: actor.id,
+        payload: {
+          orderNumber: existing.orderNumber,
+          lineCount: dto.items.length,
+          channel:
+            opts.channel === 'BALCAO'
+              ? 'counter_replace_items'
+              : 'client_replace_items',
           grossSubtotal: gross,
         },
       },
@@ -859,10 +1021,20 @@ export class OrdersService {
       where,
       orderBy: { createdAt: 'desc' },
       include: {
-        client: { select: { id: true, email: true, name: true, phone: true } },
+        client: {
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          phone: true,
+          clientType: true,
+          nif: true,
+        },
+      },
         designer: { select: { id: true, email: true, name: true } },
         attendant: { select: { id: true, email: true, name: true } },
         deliveredBy: { select: { id: true, email: true, name: true } },
+        cancelledBy: { select: { id: true, email: true, name: true } },
         _count: { select: { items: true, artVersions: true } },
         ...(includeItems
           ? {
@@ -923,7 +1095,14 @@ export class OrdersService {
           where: { id: orderId },
           include: {
             client: {
-              select: { id: true, email: true, name: true, phone: true },
+              select: {
+                id: true,
+                email: true,
+                name: true,
+                phone: true,
+                clientType: true,
+                nif: true,
+              },
             },
             designer: { select: { id: true, email: true, name: true } },
             attendant: { select: { id: true, email: true, name: true } },
@@ -952,7 +1131,16 @@ export class OrdersService {
       where: { id: orderId },
       data: { designerId: actor.id },
       include: {
-        client: { select: { id: true, email: true, name: true, phone: true } },
+        client: {
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          phone: true,
+          clientType: true,
+          nif: true,
+        },
+      },
         designer: { select: { id: true, email: true, name: true } },
         attendant: { select: { id: true, email: true, name: true } },
         _count: { select: { items: true, artVersions: true } },
@@ -1122,6 +1310,85 @@ export class OrdersService {
     await this.insumos.descontarPorPedido(orderId, forConsumo, actorId);
   }
 
+  private async cancelOrderWithCompensation(
+    order: {
+      id: string;
+      orderNumber: string;
+      status: OrderStatus;
+    },
+    actor: { id: string; role: UserRole },
+    reasonRaw: string | undefined,
+  ) {
+    const reason = reasonRaw?.trim() ?? '';
+    if (reason.length < 3) {
+      throw new BadRequestException(
+        'Indique o motivo do cancelamento (mínimo de 3 caracteres).',
+      );
+    }
+    if (reason.length > 2000) {
+      throw new BadRequestException(
+        'O motivo do cancelamento não pode exceder 2000 caracteres.',
+      );
+    }
+
+    return this.prisma.$transaction(
+      async (tx) => {
+        const claimed = await tx.order.updateMany({
+          where: { id: order.id, status: order.status },
+          data: {
+            status: OrderStatus.CANCELLED,
+            cancellationReason: reason,
+            cancelledAt: new Date(),
+            cancelledById: actor.id,
+            cancelledFromStatus: order.status,
+          },
+        });
+        if (claimed.count !== 1) {
+          throw new BadRequestException(
+            'O pedido foi actualizado por outro utilizador. Recarrega e tenta novamente.',
+          );
+        }
+
+        const restoredStockMovements =
+          await this.insumos.restoreOrderStockForCancellation(
+            tx,
+            order.id,
+            actor.id,
+          );
+        const reversedAmount =
+          await this.finance.reverseOrderPaymentForCancellation(tx, {
+            orderId: order.id,
+            orderNumber: order.orderNumber,
+            actorId: actor.id,
+            reason,
+          });
+
+        await tx.auditLog.create({
+          data: {
+            entityType: 'Order',
+            entityId: order.id,
+            orderId: order.id,
+            action: AuditAction.STATUS_CHANGE,
+            userId: actor.id,
+            payload: {
+              from: order.status,
+              to: OrderStatus.CANCELLED,
+              cancellationReason: reason,
+              restoredStockMovements,
+              reversedAmount,
+            },
+          },
+        });
+
+        return tx.order.findUniqueOrThrow({
+          where: { id: order.id },
+          include: this.orderDetailInclude(),
+        });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  }
+
   /**
    * Cliente não pode usar este método para DRAFT → SUBMITTED; usar `submitOrderWithProof`.
    */
@@ -1130,11 +1397,13 @@ export class OrdersService {
     nextStatus: OrderStatus,
     actor: { id: string; role: UserRole },
     paymentMethod?: PaymentMethod,
+    cancellationReason?: string,
   ) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       select: {
         id: true,
+        orderNumber: true,
         status: true,
         clientId: true,
         designerId: true,
@@ -1212,6 +1481,10 @@ export class OrdersService {
 
     const prevStatus = order.status;
 
+    if (nextStatus === OrderStatus.CANCELLED) {
+      return this.cancelOrderWithCompensation(order, actor, cancellationReason);
+    }
+
     /** Quem actua na fila sem `designerId` passa a ser o designer oficial (excepto marcar entrega em pedido alheio). */
     const autoAssignDesigner =
       actor.role === UserRole.DESIGNER &&
@@ -1273,6 +1546,83 @@ export class OrdersService {
     }
 
     return updated;
+  }
+
+  async reopenCancelledOrder(
+    orderId: string,
+    actor: { id: string; role: UserRole },
+    reasonRaw?: string,
+  ) {
+    if (actor.role !== UserRole.ADMIN) {
+      throw new ForbiddenException(
+        'Apenas administradores podem reabrir pedidos cancelados.',
+      );
+    }
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        id: true,
+        orderNumber: true,
+        status: true,
+        cancelledFromStatus: true,
+      },
+    });
+    if (!order) throw new NotFoundException('Pedido não encontrado.');
+    if (order.status !== OrderStatus.CANCELLED || !order.cancelledFromStatus) {
+      throw new BadRequestException(
+        'Apenas pedidos cancelados com estado anterior registado podem ser reabertos.',
+      );
+    }
+    const reason =
+      reasonRaw?.trim().slice(0, 2000) || 'Reaberto pelo administrador.';
+    const restoredStatus = order.cancelledFromStatus;
+
+    return this.prisma.$transaction(
+      async (tx) => {
+        const claimed = await tx.order.updateMany({
+          where: { id: order.id, status: OrderStatus.CANCELLED },
+          data: { status: restoredStatus },
+        });
+        if (claimed.count !== 1) {
+          throw new BadRequestException(
+            'O pedido já foi reaberto ou actualizado por outro utilizador.',
+          );
+        }
+
+        const reappliedStockMovements =
+          await this.insumos.reapplyOrderStockForReopen(tx, order.id, actor.id);
+        const reactivatedAmount =
+          await this.finance.reactivateOrderPaymentForReopen(tx, {
+            orderId: order.id,
+            orderNumber: order.orderNumber,
+            actorId: actor.id,
+          });
+
+        await tx.auditLog.create({
+          data: {
+            entityType: 'Order',
+            entityId: order.id,
+            orderId: order.id,
+            action: AuditAction.STATUS_CHANGE,
+            userId: actor.id,
+            payload: {
+              from: OrderStatus.CANCELLED,
+              to: restoredStatus,
+              operation: 'REOPEN',
+              reason,
+              reappliedStockMovements,
+              reactivatedAmount,
+            },
+          },
+        });
+
+        return tx.order.findUniqueOrThrow({
+          where: { id: order.id },
+          include: this.orderDetailInclude(),
+        });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
   }
 
   async setOrderPrice(

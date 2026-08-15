@@ -13,13 +13,14 @@ import {
   getOrder,
   getOrderAllowedTransitions,
   getUnreadCounts,
+  reopenCancelledOrder,
   type AdminOrderListRow,
   type OrderDetail,
   type OrderListItem,
   PAYMENT_METHOD_LABELS,
   type PaymentMethodValue,
 } from "@/lib/api-client";
-import { APPAREL_PRODUCT_TYPES } from "@/lib/apparel-catalog";
+import { receiptLineDescriptionFromOrderItem } from "@/lib/apparel-catalog";
 import {
   OrderArtPreviewModal,
   type OrderArtPreviewTarget,
@@ -35,7 +36,7 @@ import {
   suggestInvoiceDocumentModel,
 } from "@/lib/invoice-document-policy";
 import { useInvoiceDocumentModel } from "@/lib/use-invoice-document-model";
-import { contaPedidoModelagemPath, isStaffRole, ROUTES, staffMayViewOrderArtInPedidosPanel } from "@/lib/routes";
+import { contaPedidoModelagemPath, isStaffRole, staffMayViewOrderArtInPedidosPanel } from "@/lib/routes";
 import {
   describeDraftResponsibleLine,
   formatModelagemSavedAt,
@@ -64,6 +65,80 @@ function formatPedidoListDateParts(iso: string): { day: string; time: string } {
       minute: "2-digit",
     }).format(dt),
   };
+}
+
+type DatePeriodFilter =
+  | ""
+  | "today"
+  | "yesterday"
+  | "7d"
+  | "30d"
+  | "3m"
+  | "6m"
+  | "1y";
+
+const DATE_PERIOD_OPTIONS: { label: string; value: DatePeriodFilter }[] = [
+  { label: "Todas as datas", value: "" },
+  { label: "Hoje", value: "today" },
+  { label: "Ontem", value: "yesterday" },
+  { label: "Últimos 7 dias", value: "7d" },
+  { label: "Últimos 30 dias", value: "30d" },
+  { label: "Últimos 3 meses", value: "3m" },
+  { label: "Últimos 6 meses", value: "6m" },
+  { label: "Último ano", value: "1y" },
+];
+
+function startOfLocalDay(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+/** Filtra pela data de criação do pedido (fuso local). */
+function orderMatchesDatePeriod(
+  createdAt: string,
+  period: DatePeriodFilter,
+): boolean {
+  if (!period) return true;
+  const created = new Date(createdAt);
+  if (Number.isNaN(created.getTime())) return false;
+
+  const todayStart = startOfLocalDay(new Date());
+  const tomorrowStart = new Date(todayStart);
+  tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+
+  if (period === "today") {
+    return created >= todayStart && created < tomorrowStart;
+  }
+  if (period === "yesterday") {
+    const yesterdayStart = new Date(todayStart);
+    yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+    return created >= yesterdayStart && created < todayStart;
+  }
+  if (period === "7d") {
+    const from = new Date(todayStart);
+    from.setDate(from.getDate() - 6);
+    return created >= from && created < tomorrowStart;
+  }
+  if (period === "30d") {
+    const from = new Date(todayStart);
+    from.setDate(from.getDate() - 29);
+    return created >= from && created < tomorrowStart;
+  }
+  if (period === "3m") {
+    const from = new Date(todayStart);
+    from.setMonth(from.getMonth() - 3);
+    return created >= from && created < tomorrowStart;
+  }
+  if (period === "6m") {
+    const from = new Date(todayStart);
+    from.setMonth(from.getMonth() - 6);
+    return created >= from && created < tomorrowStart;
+  }
+  if (period === "1y") {
+    const from = new Date(todayStart);
+    from.setFullYear(from.getFullYear() - 1);
+    return created >= from && created < tomorrowStart;
+  }
+  return true;
 }
 
 /** Texto auxiliar alinhado às regras de transição por perfil (API). */
@@ -105,48 +180,11 @@ function isBalcaoInstantInsumosOrder(d: {
   return items.every((it) => it.productionProcess === "STORE_RETAIL");
 }
 
-function garmentTypeLabel(code: string | undefined): string {
-  if (!code?.trim()) return "—";
-  const found = APPAREL_PRODUCT_TYPES.find((x) => x.id === code);
-  return found?.label ?? code.replace(/_/g, " ");
-}
-
-function orderLineMeta(meta: Record<string, unknown> | null | undefined): {
-  garment: string;
-  color: string;
-  size: string;
-  sku: string;
-} {
-  if (!meta || typeof meta !== "object") {
-    return { garment: "—", color: "—", size: "—", sku: "—" };
-  }
-  const garmentBase = garmentTypeLabel(
-    typeof meta.garmentType === "string" ? meta.garmentType : undefined,
-  );
-  const ageRaw = meta.ageBand;
-  const ageSuffix =
-    typeof ageRaw === "string"
-      ? ageRaw === "CHILD"
-        ? " · infantil"
-        : ageRaw === "ADULT"
-          ? " · adulto"
-          : ` · ${ageRaw.toLowerCase()}`
-      : "";
-  const garment =
-    garmentBase === "—" && !ageSuffix
-      ? "—"
-      : garmentBase === "—"
-        ? ageSuffix.replace(/^ · /, "")
-        : `${garmentBase}${ageSuffix}`;
-  const color =
-    typeof meta.baseColor === "string" && meta.baseColor.trim()
-      ? meta.baseColor.trim()
-      : "—";
-  const size =
-    typeof meta.size === "string" && meta.size.trim() ? meta.size.trim() : "—";
-  const sku =
-    typeof meta.sku === "string" && meta.sku.trim() ? meta.sku.trim() : "—";
-  return { garment, color, size, sku };
+function orderLineSize(meta: Record<string, unknown> | null | undefined): string {
+  if (!meta || typeof meta !== "object") return "—";
+  return typeof meta.size === "string" && meta.size.trim()
+    ? meta.size.trim()
+    : "—";
 }
 
 function rowSurfaceClass(
@@ -507,11 +545,17 @@ function OrderDetailPanel({
   order,
   onClose,
   onStatusChange,
+  onReopen,
   hidePaymentAndMoney,
 }: {
   order: OrderListItem;
   onClose: () => void;
-  onStatusChange: (orderId: string, status: string) => Promise<void>;
+  onStatusChange: (
+    orderId: string,
+    status: string,
+    cancellationReason?: string,
+  ) => Promise<void>;
+  onReopen: (orderId: string) => Promise<void>;
   /** Designer: sem valores, método de pagamento, comprovativos ou anexos financeiros. */
   hidePaymentAndMoney: boolean;
 }) {
@@ -528,6 +572,9 @@ function OrderDetailPanel({
   const [artPreview, setArtPreview] = useState<OrderArtPreviewTarget | null>(
     null,
   );
+  const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
+  const [cancellationReason, setCancellationReason] = useState("");
+  const [cancelDialogErr, setCancelDialogErr] = useState<string | null>(null);
 
   useEffect(() => {
     const id = requestAnimationFrame(() => setPanelIn(true));
@@ -589,7 +636,7 @@ function OrderDetailPanel({
     return () => {
       cancelled = true;
     };
-  }, [order.id]);
+  }, [order.id, order.status]);
 
   useEffect(() => {
     let cancelled = false;
@@ -646,14 +693,32 @@ function OrderDetailPanel({
     }
   }
 
-  async function doTransition(next: string) {
+  async function doTransition(next: string, reason?: string) {
     setBusy(next); setErr(null);
     try {
-      await onStatusChange(order.id, next);
-      onClose();
+      await onStatusChange(order.id, next, reason);
+      if (next === "CANCELLED") {
+        setCancelDialogOpen(false);
+        setCancellationReason("");
+        setCancelDialogErr(null);
+      }
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Erro na transição.");
+      const message = e instanceof Error ? e.message : "Erro na transição.";
+      if (next === "CANCELLED") setCancelDialogErr(message);
+      else setErr(message);
     } finally { setBusy(null); }
+  }
+
+  async function doReopen() {
+    setBusy("REOPEN");
+    setErr(null);
+    try {
+      await onReopen(order.id);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Não foi possível reabrir.");
+    } finally {
+      setBusy(null);
+    }
   }
 
   const estadoAvancoHint = estadoAvancoHintForRole(loadSession()?.user?.role);
@@ -683,28 +748,104 @@ function OrderDetailPanel({
         aria-hidden
       />
       <aside
-        className={`relative flex h-full w-full max-w-lg flex-col overflow-y-auto border-l border-white/[0.08] bg-zinc-950/98 shadow-[-24px_0_48px_rgba(0,0,0,0.55)] ring-1 ring-white/[0.04] transition-transform duration-300 ease-out ${panelIn ? "translate-x-0" : "translate-x-full"}`}
+        className={`relative flex h-full w-full max-w-[min(100vw,1080px)] flex-col overflow-y-auto border-l border-white/[0.08] bg-zinc-950/98 shadow-[-24px_0_48px_rgba(0,0,0,0.55)] ring-1 ring-white/[0.04] transition-transform duration-300 ease-out ${panelIn ? "translate-x-0" : "translate-x-full"}`}
       >
         <div className="h-[2px] shrink-0 bg-gradient-to-r from-amber-600 via-amber-400 to-amber-600" />
 
-        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-white/[0.06] bg-zinc-950/95 px-5 py-4 backdrop-blur-md">
-          <div className="min-w-0">
-            <p className="truncate font-mono text-xs font-semibold uppercase tracking-wide text-amber-400/95">
-              {order.orderNumber}
-              {order.orderOrigin === "BALCAO" ? (
-                <span className="ml-2 rounded border border-teal-500/35 bg-teal-500/15 px-1.5 py-0.5 text-[9px] font-bold normal-case tracking-wide text-teal-200">
-                  Balcão
-                </span>
-              ) : null}
-            </p>
-            <p className="truncate text-[11px] text-zinc-500">{order.client.name}</p>
+        <div className="sticky top-0 z-10 border-b border-white/[0.06] bg-zinc-950/95 backdrop-blur-md">
+          <div className="flex items-center justify-between gap-3 px-5 py-3.5">
+            <div className="min-w-0">
+              <p className="truncate font-mono text-xs font-semibold uppercase tracking-wide text-amber-400/95">
+                {order.orderNumber}
+                {order.orderOrigin === "BALCAO" ? (
+                  <span className="ml-2 rounded border border-teal-500/35 bg-teal-500/15 px-1.5 py-0.5 text-[9px] font-bold normal-case tracking-wide text-teal-200">
+                    Balcão
+                  </span>
+                ) : null}
+              </p>
+              <p className="truncate text-[11px] text-zinc-500">{order.client.name}</p>
+            </div>
+            <button type="button" onClick={onClose} className="shrink-0 rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-white">
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M1 1l10 10M11 1L1 11"/></svg>
+            </button>
           </div>
-          <button type="button" onClick={onClose} className="shrink-0 rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-white">
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M1 1l10 10M11 1L1 11"/></svg>
-          </button>
+
+          {/* Acções de estado junto ao cabeçalho (API — fonte única) */}
+          <div className="border-t border-white/[0.05] bg-black/25 px-5 py-2.5">
+            {loadingTransitions ? (
+              <div className="flex items-center gap-2 text-[11px] text-zinc-500">
+                <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-zinc-700 border-t-amber-400" />
+                A carregar acções permitidas…
+              </div>
+            ) : order.status === "CANCELLED" && sessionRole === "ADMIN" ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-600">
+                  Pedido cancelado
+                </p>
+                <button
+                  type="button"
+                  disabled={!!busy}
+                  onClick={() => void doReopen()}
+                  className="rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-3 py-1.5 text-[11px] font-semibold text-emerald-300 transition hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {busy === "REOPEN" ? "A reabrir…" : "Reabrir pedido"}
+                </button>
+                {err ? (
+                  <p className="w-full text-[11px] text-red-400" role="alert">
+                    {err}
+                  </p>
+                ) : null}
+              </div>
+            ) : allowedNext.length > 0 ? (
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-600">
+                  Avançar estado
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {allowedNext.map((next) => (
+                    <button
+                      key={next}
+                      type="button"
+                      disabled={!!busy}
+                      onClick={() => {
+                        if (next === "CANCELLED") {
+                          setCancelDialogErr(null);
+                          setCancelDialogOpen(true);
+                          return;
+                        }
+                        void doTransition(next);
+                      }}
+                      title={estadoAvancoHint ?? undefined}
+                      className={`rounded-lg px-2.5 py-1.5 text-[11px] font-semibold transition ${
+                        next === "CANCELLED"
+                          ? "border border-red-500/30 bg-red-950/20 text-red-400 hover:bg-red-950/40"
+                          : "border border-amber-400/25 bg-amber-400/12 text-amber-300 hover:bg-amber-400/22"
+                      } disabled:cursor-not-allowed disabled:opacity-50`}
+                    >
+                      {busy === next ? "…" : orderStatusLabel(next)}
+                    </button>
+                  ))}
+                </div>
+                {err ? (
+                  <p className="w-full text-[11px] text-red-400" role="alert">
+                    {err}
+                  </p>
+                ) : null}
+              </div>
+            ) : err ? (
+              <p className="text-[11px] text-red-400" role="alert">
+                {err}
+              </p>
+            ) : (
+              <p className="text-[11px] text-zinc-600">
+                Sem transições disponíveis para o teu perfil neste estado.
+              </p>
+            )}
+          </div>
         </div>
 
-        <div className="space-y-4 px-5 pb-8 pt-4">
+        <div className="grid flex-1 items-start gap-4 px-5 pb-6 pt-4 lg:grid-cols-[minmax(0,1fr)_minmax(300px,352px)] lg:gap-5">
+          <div className="min-w-0 space-y-4">
           {/* Estado actual */}
           <div className="flex flex-wrap items-center gap-2">
             <span className={`inline-flex items-center rounded-md px-2.5 py-1 text-[11px] font-semibold ring-1 ${statusColor(order.status)}`}>
@@ -717,6 +858,25 @@ function OrderDetailPanel({
             status={order.status}
             balcaoInsumosOnly={balcaoInsumosOnly}
           />
+
+          {order.status === "CANCELLED" ? (
+            <div className="rounded-xl border border-red-500/25 bg-red-950/20 px-4 py-3 text-xs">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-red-400/90">
+                Motivo do cancelamento
+              </p>
+              <p className="mt-1.5 whitespace-pre-wrap leading-relaxed text-zinc-300">
+                {order.cancellationReason || "Motivo não registado (pedido antigo)."}
+              </p>
+              {order.cancelledAt ? (
+                <p className="mt-2 text-[10px] text-zinc-600">
+                  {order.cancelledBy?.name
+                    ? `${order.cancelledBy.name} · `
+                    : ""}
+                  {formatDate(order.cancelledAt)}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
 
           {order.status === "DELIVERED" ? (
             <div className="rounded-xl border border-emerald-500/25 bg-emerald-950/20 px-4 py-3 text-xs ring-1 ring-emerald-500/10">
@@ -742,22 +902,6 @@ function OrderDetailPanel({
               )}
             </div>
           ) : null}
-
-          {!hidePaymentAndMoney ? (
-            <div className="rounded-xl border border-white/[0.07] bg-black/30 px-4 py-3">
-              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-600">Valor total</p>
-              <span className="text-xl font-bold text-amber-300 tabular-nums">
-                {formatMoney(order.totalAmount, order.currency)}
-              </span>
-            </div>
-          ) : null}
-
-          {/* Info cliente */}
-          <div className="rounded-xl border border-white/[0.07] bg-black/30 px-4 py-3 text-xs space-y-1.5">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-600 mb-2">Cliente</p>
-            <p className="text-zinc-300">{order.client.name}</p>
-            <p className="text-zinc-500">{order.client.email}</p>
-          </div>
 
           {/* Produção: linhas e (para não-atendente) acesso à arte / editor */}
           <div className="rounded-xl border border-violet-500/25 bg-violet-950/15 px-4 py-3 ring-1 ring-violet-400/10">
@@ -868,12 +1012,10 @@ function OrderDetailPanel({
               </p>
             ) : orderDetail && orderDetail.items.length > 0 ? (
               <div className="overflow-x-auto rounded-lg border border-white/[0.06] bg-black/25">
-                <table className="w-full min-w-[20rem] text-left text-[11px]">
+                <table className="w-full min-w-[18rem] text-left text-[11px]">
                   <thead>
                     <tr className="border-b border-white/[0.06] text-zinc-500">
-                      <th className="px-2.5 py-2 font-medium">Produto</th>
-                      <th className="px-2.5 py-2 font-medium whitespace-nowrap">Tipo</th>
-                      <th className="px-2.5 py-2 font-medium whitespace-nowrap">Cor</th>
+                      <th className="px-2.5 py-2 font-medium">Artigo</th>
                       <th className="px-2.5 py-2 font-medium whitespace-nowrap">Tam.</th>
                       <th className="px-2.5 py-2 font-medium whitespace-nowrap">Processo</th>
                       <th className="px-2.5 py-2 text-right font-medium tabular-nums">Qtd</th>
@@ -884,32 +1026,27 @@ function OrderDetailPanel({
                   </thead>
                   <tbody className="divide-y divide-white/[0.05] text-zinc-300">
                     {orderDetail.items.map((line) => {
-                      const meta = orderLineMeta(
+                      const size = orderLineSize(
                         line.metadata as Record<string, unknown> | null | undefined,
                       );
-                      const skuShow =
-                        meta.sku !== "—"
-                          ? meta.sku
-                          : line.skuCode?.trim()
-                            ? line.skuCode
-                            : "—";
+                      const articleLabel = receiptLineDescriptionFromOrderItem(
+                        line.productName,
+                        line.metadata ?? null,
+                      );
                       return (
                         <tr key={line.id} className="align-top">
-                          <td className="max-w-[11rem] px-2.5 py-2 font-medium text-white leading-snug">
-                            {line.productName}
-                            {skuShow !== "—" ? (
-                              <span className="mt-0.5 block text-[10px] font-normal text-zinc-500">
-                                SKU: {skuShow}
-                              </span>
-                            ) : null}
+                          <td className="px-2.5 py-2 font-medium leading-snug text-white">
+                            {articleLabel}
                           </td>
-                          <td className="whitespace-nowrap px-2.5 py-2 text-zinc-400">{meta.garment}</td>
-                          <td className="whitespace-nowrap px-2.5 py-2 text-zinc-400">{meta.color}</td>
-                          <td className="whitespace-nowrap px-2.5 py-2 tabular-nums text-zinc-400">{meta.size}</td>
+                          <td className="whitespace-nowrap px-2.5 py-2 tabular-nums text-zinc-400">
+                            {size}
+                          </td>
                           <td className="whitespace-nowrap px-2.5 py-2 text-zinc-400">
                             {productionProcessLabel(line.productionProcess)}
                           </td>
-                          <td className="whitespace-nowrap px-2.5 py-2 text-right tabular-nums">{line.quantity}</td>
+                          <td className="whitespace-nowrap px-2.5 py-2 text-right tabular-nums">
+                            {line.quantity}
+                          </td>
                           {!hidePaymentAndMoney ? (
                             <td className="whitespace-nowrap px-2.5 py-2 text-right tabular-nums text-amber-200/90">
                               {formatMoney(line.unitPrice, order.currency)}
@@ -924,6 +1061,35 @@ function OrderDetailPanel({
             ) : (
               <p className="text-[11px] text-zinc-500">Sem linhas de artigo registadas.</p>
             )}
+          </div>
+
+          {/* Chat com o cliente */}
+          <div>
+            <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-600">Chat com o cliente</p>
+            <ChatBox
+              orderId={order.id}
+              currentUserId={loadSession()?.user?.id ?? ""}
+              peerLabel={order.client.name}
+              maxH="min(200px,28vh)"
+            />
+          </div>
+          </div>
+
+          {/* Coluna lateral: cliente, valores e documentos */}
+          <div className="min-w-0 space-y-4 lg:sticky lg:top-[132px]">
+          {!hidePaymentAndMoney ? (
+            <div className="rounded-xl border border-white/[0.07] bg-black/30 px-4 py-3">
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-600">Valor total</p>
+              <span className="text-xl font-bold text-amber-300 tabular-nums">
+                {formatMoney(order.totalAmount, order.currency)}
+              </span>
+            </div>
+          ) : null}
+
+          {/* Info cliente */}
+          <div className="rounded-xl border border-white/[0.07] bg-black/30 px-4 py-3 text-xs">
+            <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-600">Cliente</p>
+            <p className="text-zinc-300">{order.client.name}</p>
           </div>
 
           {/* Método de pagamento, comprovantes e anexos — apenas equipa com permissão financeira */}
@@ -995,68 +1161,97 @@ function OrderDetailPanel({
             </div>
           ) : null}
 
-          {/* Transições de estado (API — fonte única) */}
-          {loadingTransitions ? (
-            <div className="rounded-xl border border-white/[0.06] bg-zinc-950/40 px-4 py-6 text-center">
-              <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-zinc-700 border-t-amber-400" />
-              <p className="mt-2 text-[11px] text-zinc-500">
-                A carregar acções permitidas…
-              </p>
-            </div>
-          ) : allowedNext.length > 0 ? (
-            <div>
-              <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-600">
-                Avançar estado
-              </p>
-              {estadoAvancoHint ? (
-                <p className="mb-2 text-[10px] leading-relaxed text-zinc-500">{estadoAvancoHint}</p>
-              ) : null}
-              <div className="flex flex-wrap gap-2">
-                {allowedNext.map((next) => (
-                  <button
-                    key={next}
-                    type="button"
-                    disabled={!!busy}
-                    onClick={() => void doTransition(next)}
-                    className={`rounded-xl px-3 py-2 text-xs font-semibold transition ${
-                      next === "CANCELLED"
-                        ? "border border-red-500/30 bg-red-950/20 text-red-400 hover:bg-red-950/40"
-                        : "border border-amber-400/20 bg-amber-400/10 text-amber-300 hover:bg-amber-400/20"
-                    } disabled:cursor-not-allowed disabled:opacity-50`}
-                  >
-                    {busy === next ? "…" : orderStatusLabel(next)}
-                  </button>
-                ))}
-              </div>
-              {err && <p className="mt-2 text-[11px] text-red-400">{err}</p>}
-            </div>
-          ) : (
-            err && (
-              <p className="rounded-lg bg-red-950/30 px-3 py-2 text-[11px] text-red-400">
-                {err}
-              </p>
-            )
-          )}
-
-          {/* Chat com o cliente */}
-          <div>
-            <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-600">Chat com o cliente</p>
-            <ChatBox
-              orderId={order.id}
-              currentUserId={loadSession()?.user?.id ?? ""}
-              peerLabel={order.client.name}
-              maxH="min(320px,42vh)"
-            />
-          </div>
-
           {/* Datas */}
           <div className="rounded-xl border border-white/[0.06] bg-black/20 px-4 py-3 text-[11px] space-y-1 text-zinc-600">
             <div className="flex justify-between"><span>Criado</span><span>{formatDate(order.createdAt)}</span></div>
             <div className="flex justify-between"><span>Atualizado</span><span>{formatDate(order.updatedAt)}</span></div>
           </div>
+          </div>
         </div>
       </aside>
     </div>
+    {cancelDialogOpen ? (
+      <div
+        className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="cancel-order-title"
+      >
+        <button
+          type="button"
+          aria-label="Fechar confirmação"
+          className="absolute inset-0 bg-black/75 backdrop-blur-sm"
+          disabled={busy === "CANCELLED"}
+          onClick={() => setCancelDialogOpen(false)}
+        />
+        <div className="relative w-full max-w-md overflow-hidden rounded-2xl border border-red-500/25 bg-zinc-950 shadow-2xl">
+          <div className="border-b border-white/[0.07] px-5 py-4">
+            <h3 id="cancel-order-title" className="font-semibold text-white">
+              Cancelar {order.orderNumber}
+            </h3>
+            <p className="mt-1 text-xs leading-relaxed text-zinc-500">
+              O stock utilizado será reposto e o pagamento será estornado no
+              caixa/razão. O administrador poderá reabrir o pedido depois.
+            </p>
+          </div>
+          <div className="px-5 py-4">
+            <label
+              htmlFor={`cancel-reason-${order.id}`}
+              className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500"
+            >
+              Motivo do cancelamento
+            </label>
+            <textarea
+              id={`cancel-reason-${order.id}`}
+              value={cancellationReason}
+              onChange={(e) => {
+                setCancellationReason(e.target.value);
+                setCancelDialogErr(null);
+              }}
+              rows={4}
+              maxLength={2000}
+              autoFocus
+              placeholder="Descreve por que motivo o pedido está a ser cancelado…"
+              className="mt-2 w-full resize-y rounded-xl border border-white/[0.1] bg-black/35 px-3 py-2.5 text-sm text-zinc-200 outline-none placeholder:text-zinc-700 focus:border-red-400/45 focus:ring-2 focus:ring-red-400/10"
+            />
+            <div className="mt-1 flex justify-between text-[10px] text-zinc-600">
+              <span>Mínimo de 3 caracteres</span>
+              <span>{cancellationReason.length}/2000</span>
+            </div>
+            {cancelDialogErr ? (
+              <p className="mt-2 text-xs text-red-400" role="alert">
+                {cancelDialogErr}
+              </p>
+            ) : null}
+          </div>
+          <div className="flex justify-end gap-2 border-t border-white/[0.07] bg-black/20 px-5 py-3">
+            <button
+              type="button"
+              disabled={busy === "CANCELLED"}
+              onClick={() => setCancelDialogOpen(false)}
+              className="rounded-lg px-3 py-2 text-xs font-medium text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-200"
+            >
+              Voltar
+            </button>
+            <button
+              type="button"
+              disabled={
+                busy === "CANCELLED" ||
+                cancellationReason.trim().length < 3
+              }
+              onClick={() =>
+                void doTransition("CANCELLED", cancellationReason.trim())
+              }
+              className="rounded-lg bg-red-500/90 px-3 py-2 text-xs font-semibold text-white transition hover:bg-red-400 disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              {busy === "CANCELLED"
+                ? "A cancelar…"
+                : "Confirmar cancelamento"}
+            </button>
+          </div>
+        </div>
+      </div>
+    ) : null}
     {!hideArtAndEditor ? (
       <OrderArtPreviewModal
         open={artPreview !== null}
@@ -1084,23 +1279,25 @@ function PedidosKpiCard({
 }) {
   return (
     <div
-      className={`rounded-2xl border border-white/[0.07] bg-gradient-to-br p-4 ring-1 ring-white/[0.04] ${accent}`}
+      className={`rounded-xl border border-white/[0.07] bg-gradient-to-br px-3 py-2.5 ring-1 ring-white/[0.04] ${accent}`}
     >
-      <div className="flex items-start justify-between gap-2">
-        <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[9px] font-semibold uppercase tracking-wider text-zinc-500">
           {label}
         </p>
         {icon ? (
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/[0.06] bg-black/25 text-amber-400/85">
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border border-white/[0.06] bg-black/25 text-amber-400/85 [&_svg]:h-3.5 [&_svg]:w-3.5">
             {icon}
           </span>
         ) : null}
       </div>
-      <p className="mt-1.5 text-2xl font-bold tabular-nums tracking-tight text-white">
+      <p className="mt-0.5 text-lg font-bold tabular-nums tracking-tight text-white">
         {value}
       </p>
       {hint ? (
-        <p className="mt-1 text-[10px] leading-snug text-zinc-500">{hint}</p>
+        <p className="mt-0.5 truncate text-[10px] leading-snug text-zinc-500">
+          {hint}
+        </p>
       ) : null}
     </div>
   );
@@ -1130,30 +1327,30 @@ function PedidosStatusMixBar({
   );
   if (segments.length === 0) return null;
   return (
-    <div className="relative mt-5">
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
-          Distribuição por fase nesta lista
+    <div className="relative mt-3">
+      <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
+          Distribuição por fase
         </p>
-        <p className="text-[11px] tabular-nums text-zinc-500">
-          {total} pedido{total !== 1 ? "s" : ""} carregado{total !== 1 ? "s" : ""}
+        <p className="text-[10px] tabular-nums text-zinc-500">
+          {total} pedido{total !== 1 ? "s" : ""}
         </p>
       </div>
       <div
-        className="flex h-2.5 w-full overflow-hidden rounded-full bg-zinc-800/90 ring-1 ring-white/[0.06]"
+        className="flex h-1.5 w-full overflow-hidden rounded-full bg-zinc-800/90 ring-1 ring-white/[0.06]"
         role="img"
         aria-label="Proporção de pedidos por estado na amostra"
       >
         {segments.map(({ st, n }) => (
           <div
             key={st}
-            className={`min-h-[6px] min-w-px ${statusSegmentSolidClass(st)} opacity-[0.92]`}
+            className={`min-h-[4px] min-w-px ${statusSegmentSolidClass(st)} opacity-[0.92]`}
             style={{ flex: n }}
             title={`${orderStatusLabel(st)}: ${n}`}
           />
         ))}
       </div>
-      <ul className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1.5 text-[10px] text-zinc-500">
+      <ul className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-zinc-500">
         {segments.map(({ st, n }) => (
           <li key={st} className="flex items-center gap-1.5">
             <span
@@ -1162,9 +1359,6 @@ function PedidosStatusMixBar({
             />
             <span className="text-zinc-400">{orderStatusLabel(st)}</span>
             <span className="font-semibold tabular-nums text-zinc-300">{n}</span>
-            <span className="tabular-nums text-zinc-600">
-              ({Math.round((n / total) * 100)}%)
-            </span>
           </li>
         ))}
       </ul>
@@ -1214,9 +1408,11 @@ export default function AdminPedidosPage() {
   const searchParams = useSearchParams();
   const orderIdFromUrl = searchParams.get("order");
   const statusFromUrl = searchParams.get("status");
+  const periodFromUrl = searchParams.get("period");
   const [orders, setOrders] = useState<AdminOrderListRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("");
+  const [datePeriod, setDatePeriod] = useState<DatePeriodFilter>("");
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<AdminOrderListRow | null>(null);
   const [unreadMap, setUnreadMap] = useState<Record<string, number>>({});
@@ -1245,6 +1441,22 @@ export default function AdminPedidosPage() {
   }, [statusFromUrl]);
 
   useEffect(() => {
+    const allowed: DatePeriodFilter[] = [
+      "",
+      "today",
+      "yesterday",
+      "7d",
+      "30d",
+      "3m",
+      "6m",
+      "1y",
+    ];
+    if (periodFromUrl && allowed.includes(periodFromUrl as DatePeriodFilter)) {
+      setDatePeriod(periodFromUrl as DatePeriodFilter);
+    }
+  }, [periodFromUrl]);
+
+  useEffect(() => {
     if (!orderIdFromUrl || orders.length === 0) return;
     const found = orders.find((o) => o.id === orderIdFromUrl);
     if (found) setSelected(found);
@@ -1266,10 +1478,42 @@ export default function AdminPedidosPage() {
     return () => clearInterval(id);
   }, [orders]);
 
-  const handleStatusChange = useCallback(async (orderId: string, status: string) => {
-    await adminChangeOrderStatus(orderId, status);
-    await load();
-  }, [load]);
+  const refreshOrderInList = useCallback(async (orderId: string) => {
+    const data = await adminListOrders(200, 0, true);
+    setOrders(data);
+    const refreshed = data.find((o) => o.id === orderId);
+    if (refreshed) setSelected(refreshed);
+  }, []);
+
+  const handleStatusChange = useCallback(
+    async (
+      orderId: string,
+      status: string,
+      cancellationReason?: string,
+    ) => {
+      const updated = await adminChangeOrderStatus(
+        orderId,
+        status,
+        cancellationReason,
+      );
+      setSelected((prev) =>
+        prev?.id === orderId ? { ...prev, ...updated } : prev,
+      );
+      await refreshOrderInList(orderId);
+    },
+    [refreshOrderInList],
+  );
+
+  const handleReopenOrder = useCallback(
+    async (orderId: string) => {
+      const updated = await reopenCancelledOrder(orderId);
+      setSelected((prev) =>
+        prev?.id === orderId ? { ...prev, ...updated } : prev,
+      );
+      await refreshOrderInList(orderId);
+    },
+    [refreshOrderInList],
+  );
 
   const handleListReceiptPrint = useCallback(async (e: MouseEvent, o: OrderListItem) => {
     e.preventDefault();
@@ -1311,65 +1555,105 @@ export default function AdminPedidosPage() {
     }
   }, []);
 
-  const visible = orders.filter((o) => {
+  const dateScopedOrders = useMemo(
+    () => orders.filter((o) => orderMatchesDatePeriod(o.createdAt, datePeriod)),
+    [orders, datePeriod],
+  );
+
+  const visible = dateScopedOrders.filter((o) => {
     if (filter && o.status !== filter) return false;
     if (search) {
       const q = search.toLowerCase();
-      if (!o.orderNumber.toLowerCase().includes(q) && !o.client.name.toLowerCase().includes(q)) return false;
+      if (
+        !o.orderNumber.toLowerCase().includes(q) &&
+        !o.client.name.toLowerCase().includes(q)
+      ) {
+        return false;
+      }
     }
     return true;
   });
 
-  const submittedCount = orders.filter((o) => o.status === "SUBMITTED").length;
+  const submittedCount = dateScopedOrders.filter(
+    (o) => o.status === "SUBMITTED",
+  ).length;
 
   const kpi = useMemo(() => {
-    const needsPrice = orders.filter(
+    const needsPrice = dateScopedOrders.filter(
       (o) => orderAmount(o) <= 0 && o.status !== "CANCELLED",
     ).length;
-    const unreadOrders = orders.filter((o) => (unreadMap[o.id] ?? 0) > 0).length;
-    const totalUnreadMsgs = orders.reduce(
+    const unreadOrders = dateScopedOrders.filter(
+      (o) => (unreadMap[o.id] ?? 0) > 0,
+    ).length;
+    const totalUnreadMsgs = dateScopedOrders.reduce(
       (s, o) => s + (unreadMap[o.id] ?? 0),
       0,
     );
     return { needsPrice, unreadOrders, totalUnreadMsgs };
-  }, [orders, unreadMap]);
+  }, [dateScopedOrders, unreadMap]);
 
   const statusCounts = useMemo(() => {
     const m: Record<string, number> = {};
-    for (const o of orders) {
+    for (const o of dateScopedOrders) {
       m[o.status] = (m[o.status] ?? 0) + 1;
+    }
+    return m;
+  }, [dateScopedOrders]);
+
+  const datePeriodCounts = useMemo(() => {
+    const m: Record<DatePeriodFilter, number> = {
+      "": orders.length,
+      today: 0,
+      yesterday: 0,
+      "7d": 0,
+      "30d": 0,
+      "3m": 0,
+      "6m": 0,
+      "1y": 0,
+    };
+    for (const o of orders) {
+      if (orderMatchesDatePeriod(o.createdAt, "today")) m.today += 1;
+      if (orderMatchesDatePeriod(o.createdAt, "yesterday")) m.yesterday += 1;
+      if (orderMatchesDatePeriod(o.createdAt, "7d")) m["7d"] += 1;
+      if (orderMatchesDatePeriod(o.createdAt, "30d")) m["30d"] += 1;
+      if (orderMatchesDatePeriod(o.createdAt, "3m")) m["3m"] += 1;
+      if (orderMatchesDatePeriod(o.createdAt, "6m")) m["6m"] += 1;
+      if (orderMatchesDatePeriod(o.createdAt, "1y")) m["1y"] += 1;
     }
     return m;
   }, [orders]);
 
-  const listFiltered = Boolean(filter || search.trim());
+  const clearListFilters = useCallback(() => {
+    setSearch("");
+    setFilter("");
+    setDatePeriod("");
+  }, []);
+
+  const listFiltered = Boolean(filter || search.trim() || datePeriod);
 
   return (
-    <div className="min-h-full p-4 sm:p-6 lg:p-8">
-      {/* Cabeçalho + hero leve */}
-      <div className="relative mb-8 overflow-hidden rounded-3xl border border-white/[0.08] bg-gradient-to-br from-zinc-900/90 via-zinc-900/55 to-amber-950/25 px-5 py-7 sm:px-8 sm:py-8 ring-1 ring-white/[0.04]">
-        <div className="pointer-events-none absolute -right-16 -top-20 h-56 w-56 rounded-full bg-amber-500/10 blur-3xl" />
-        <div className="relative flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-amber-400/85">
-              Operação
-            </p>
-            <h1 className="mt-2 text-2xl font-bold tracking-tight text-white sm:text-3xl">
+    <div className="mx-auto min-h-full w-full max-w-[1680px] p-4 sm:p-6 lg:p-8">
+      {/* Cabeçalho compacto */}
+      <div className="relative mb-4 overflow-hidden rounded-2xl border border-white/[0.08] bg-gradient-to-br from-zinc-900/90 via-zinc-900/55 to-amber-950/25 px-4 py-3.5 sm:px-5 sm:py-4 ring-1 ring-white/[0.04]">
+        <div className="pointer-events-none absolute -right-12 -top-14 h-36 w-36 rounded-full bg-amber-500/10 blur-3xl" />
+        <div className="relative flex flex-wrap items-center justify-between gap-2.5">
+          <div className="min-w-0">
+            <h1 className="text-lg font-bold tracking-tight text-white sm:text-xl">
               {hidePaymentAndMoney ? "Pedidos" : "Pedidos & faturamento"}
             </h1>
-            <p className="mt-2 max-w-xl text-sm text-zinc-400">
+            <p className="mt-0.5 text-xs text-zinc-500">
               {hidePaymentAndMoney ? (
                 <>
                   {orders.length} pedido{orders.length !== 1 ? "s" : ""} na vista
-                  operacional (sem dados de pagamento ou valores).
+                  operacional
                   {listFiltered ? (
-                    <span className="text-zinc-500">
+                    <span>
                       {" "}
-                      · A mostrar{" "}
+                      ·{" "}
                       <span className="font-semibold text-zinc-300">
                         {visible.length}
                       </span>{" "}
-                      com os filtros actuais
+                      filtrados
                     </span>
                   ) : null}
                 </>
@@ -1378,13 +1662,13 @@ export default function AdminPedidosPage() {
                   {orders.length} pedido{orders.length !== 1 ? "s" : ""} carregado
                   {orders.length !== 1 ? "s" : ""}
                   {listFiltered ? (
-                    <span className="text-zinc-500">
+                    <span>
                       {" "}
-                      · A mostrar{" "}
+                      ·{" "}
                       <span className="font-semibold text-zinc-300">
                         {visible.length}
                       </span>{" "}
-                      com os filtros actuais
+                      filtrados
                     </span>
                   ) : null}
                 </>
@@ -1394,10 +1678,11 @@ export default function AdminPedidosPage() {
           <button
             type="button"
             onClick={() => void load()}
-            className="rounded-xl border border-white/[0.1] bg-white/[0.04] px-4 py-2.5 text-xs font-medium text-zinc-200 transition hover:border-amber-400/25 hover:bg-amber-500/10 hover:text-amber-100"
+            disabled={loading}
+            className="inline-flex items-center rounded-lg border border-white/[0.1] bg-white/[0.04] px-3 py-1.5 text-[11px] font-medium text-zinc-200 transition hover:border-amber-400/25 hover:bg-amber-500/10 hover:text-amber-100 disabled:cursor-wait disabled:opacity-60"
           >
             <svg
-              className="mr-1.5 inline-block h-3.5 w-3.5"
+              className={`mr-1.5 h-3 w-3 ${loading ? "animate-spin" : ""}`}
               fill="none"
               viewBox="0 0 16 16"
               stroke="currentColor"
@@ -1407,13 +1692,13 @@ export default function AdminPedidosPage() {
               <path d="M14 8A6 6 0 1 1 8 2" />
               <path d="M14 2v6h-6" />
             </svg>
-            Atualizar lista
+            {loading ? "A atualizar…" : "Atualizar"}
           </button>
         </div>
 
         {/* KPIs — designers não veem indicadores ligados a valores */}
         <div
-          className={`relative mt-6 grid gap-3 sm:grid-cols-2 ${
+          className={`relative mt-3 grid gap-2 sm:grid-cols-2 ${
             hidePaymentAndMoney ? "xl:grid-cols-3" : "xl:grid-cols-4"
           }`}
         >
@@ -1462,8 +1747,12 @@ export default function AdminPedidosPage() {
           />
           <PedidosKpiCard
             label="Total na lista"
-            value={String(orders.length)}
-            hint="Limite de carregamento: 200"
+            value={String(datePeriod ? dateScopedOrders.length : orders.length)}
+            hint={
+              datePeriod
+                ? `Filtrado · amostra máxima 200`
+                : "Limite de carregamento: 200"
+            }
             accent="from-zinc-500/10 to-transparent"
             icon={
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.75">
@@ -1473,8 +1762,11 @@ export default function AdminPedidosPage() {
           />
         </div>
 
-        {!loading && orders.length > 0 ? (
-          <PedidosStatusMixBar counts={statusCounts} total={orders.length} />
+        {!loading && dateScopedOrders.length > 0 ? (
+          <PedidosStatusMixBar
+            counts={statusCounts}
+            total={dateScopedOrders.length}
+          />
         ) : null}
       </div>
 
@@ -1486,7 +1778,7 @@ export default function AdminPedidosPage() {
               Pesquisa e filtros
             </p>
             <p className="mt-0.5 text-xs text-zinc-500">
-              Filtra por fase (com contagens da amostra) ou localiza pelo nº do pedido ou cliente.
+              Filtra por data de criação, fase ou localiza pelo nº do pedido ou cliente.
             </p>
           </div>
           {!loading && orders.length > 0 ? (
@@ -1498,16 +1790,75 @@ export default function AdminPedidosPage() {
             </p>
           ) : null}
         </div>
-        <div className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-start">
-          <input
-            type="search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Pesquisar nº ou cliente…"
-            className="w-full rounded-xl border border-white/[0.08] bg-zinc-950/50 px-3 py-2.5 text-xs text-zinc-200 placeholder:text-zinc-600 outline-none focus:border-amber-400/40 focus:ring-1 focus:ring-amber-400/20 lg:max-w-xs"
-            aria-label="Pesquisar pedidos"
-          />
-          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+        <div className="flex flex-col gap-3">
+          <div className="flex w-full gap-2 lg:max-w-sm">
+            <label className="relative min-w-0 flex-1">
+              <span className="sr-only">Pesquisar pedidos</span>
+              <svg
+                className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-600"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth="1.75"
+                aria-hidden
+              >
+                <circle cx="11" cy="11" r="7" />
+                <path strokeLinecap="round" d="m20 20-4-4" />
+              </svg>
+              <input
+                type="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Nº do pedido ou cliente…"
+                className="w-full rounded-xl border border-white/[0.08] bg-zinc-950/50 py-2.5 pl-9 pr-3 text-xs text-zinc-200 placeholder:text-zinc-600 outline-none transition focus:border-amber-400/40 focus:ring-2 focus:ring-amber-400/10"
+              />
+            </label>
+            {listFiltered ? (
+              <button
+                type="button"
+                onClick={clearListFilters}
+                className="shrink-0 rounded-xl border border-white/[0.08] px-3 py-2 text-xs font-medium text-zinc-400 transition hover:border-zinc-600 hover:bg-white/[0.04] hover:text-zinc-200"
+              >
+                Limpar
+              </button>
+            ) : null}
+          </div>
+
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-600">
+              Por data
+            </span>
+            <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1 [scrollbar-width:thin]">
+              {DATE_PERIOD_OPTIONS.map((opt) => {
+                const count = datePeriodCounts[opt.value];
+                return (
+                  <button
+                    key={opt.value || "all-dates"}
+                    type="button"
+                    onClick={() => setDatePeriod(opt.value)}
+                    className={`flex shrink-0 items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium transition ${
+                      datePeriod === opt.value
+                        ? "bg-teal-400/15 text-teal-200 ring-1 ring-teal-400/35"
+                        : "border border-white/[0.08] text-zinc-500 hover:border-zinc-600 hover:text-zinc-300"
+                    }`}
+                  >
+                    <span>{opt.label}</span>
+                    <span
+                      className={`rounded-md px-1.5 py-px text-[10px] font-bold tabular-nums ${
+                        datePeriod === opt.value
+                          ? "bg-teal-400/25 text-teal-100"
+                          : "bg-white/[0.06] text-zinc-500"
+                      }`}
+                    >
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="flex min-w-0 flex-col gap-1.5">
             <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-600">
               Por fase
             </span>
@@ -1515,7 +1866,7 @@ export default function AdminPedidosPage() {
               {FILTER_OPTIONS.map((opt) => {
                 const count =
                   opt.value === ""
-                    ? orders.length
+                    ? dateScopedOrders.length
                     : (statusCounts[opt.value] ?? 0);
                 return (
                   <button
@@ -1574,10 +1925,7 @@ export default function AdminPedidosPage() {
             {listFiltered ? (
               <button
                 type="button"
-                onClick={() => {
-                  setSearch("");
-                  setFilter("");
-                }}
+                onClick={clearListFilters}
                 className="rounded-xl border border-white/[0.1] bg-white/[0.05] px-4 py-2 text-xs font-medium text-zinc-200 hover:bg-white/[0.08]"
               >
                 Limpar filtros
@@ -1593,7 +1941,155 @@ export default function AdminPedidosPage() {
           </div>
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-2xl border border-white/[0.07] bg-zinc-900/25 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] ring-1 ring-white/[0.04]">
+        <>
+        <div className="space-y-3 md:hidden">
+          <div className="flex items-center justify-between px-1">
+            <p className="text-[11px] text-zinc-500">
+              <span className="font-semibold text-zinc-300">{visible.length}</span>{" "}
+              pedido{visible.length !== 1 ? "s" : ""}
+            </p>
+            <p className="text-[10px] text-zinc-600">Toque para ver detalhes</p>
+          </div>
+          {visible.map((o) => {
+            const unread = unreadMap[o.id] ?? 0;
+            const isSelected = selected?.id === o.id;
+            const dateParts = formatPedidoListDateParts(o.createdAt);
+            return (
+              <article
+                key={o.id}
+                className={`overflow-hidden rounded-2xl border bg-zinc-900/45 shadow-sm transition ${
+                  isSelected
+                    ? "border-amber-400/45 ring-1 ring-amber-400/20"
+                    : unread > 0
+                      ? "border-sky-400/25"
+                      : "border-white/[0.07]"
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={() => setSelected(o)}
+                  className="w-full px-4 py-4 text-left"
+                  aria-label={`Abrir detalhes do pedido ${o.orderNumber}`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {o.orderOrigin === "BALCAO" ? (
+                          <span className="rounded border border-teal-500/35 bg-teal-500/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-teal-200">
+                            Balcão
+                          </span>
+                        ) : null}
+                        <span className="font-mono text-xs font-bold text-amber-300">
+                          {o.orderNumber}
+                        </span>
+                      </div>
+                      <p className="mt-2 truncate text-sm font-semibold text-zinc-100">
+                        {o.client.name}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 flex-col items-end gap-2">
+                      <span
+                        className={`inline-flex rounded-md px-2 py-0.5 text-[10px] font-semibold ring-1 ${statusColor(o.status)}`}
+                      >
+                        {orderStatusLabel(o.status)}
+                      </span>
+                      {unread > 0 ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-sky-400/15 px-2 py-0.5 text-[10px] font-bold text-sky-300">
+                          {unread} nova{unread !== 1 ? "s" : ""}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="mt-4">
+                    <OrderPhaseStrip
+                      status={o.status}
+                      compact
+                      balcaoInsumosOnly={isBalcaoInstantInsumosOrder(o)}
+                    />
+                  </div>
+
+                  <div
+                    className={`mt-4 grid gap-3 border-t border-white/[0.06] pt-3 ${
+                      hidePaymentAndMoney ? "grid-cols-2" : "grid-cols-3"
+                    }`}
+                  >
+                    {!hidePaymentAndMoney ? (
+                      <>
+                        <div>
+                          <p className="text-[9px] font-semibold uppercase tracking-wider text-zinc-600">
+                            Pagamento
+                          </p>
+                          <p className="mt-1 truncate text-[11px] text-zinc-400">
+                            {o.paymentMethod
+                              ? PAYMENT_METHOD_LABELS[
+                                  o.paymentMethod as PaymentMethodValue
+                                ] ?? o.paymentMethod
+                              : "Não definido"}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-[9px] font-semibold uppercase tracking-wider text-zinc-600">
+                            Total
+                          </p>
+                          <p className="mt-1 text-xs font-semibold tabular-nums text-amber-300">
+                            {orderAmount(o) > 0
+                              ? formatMoney(o.totalAmount, o.currency)
+                              : "—"}
+                          </p>
+                        </div>
+                      </>
+                    ) : null}
+                    <div className={hidePaymentAndMoney ? "text-right" : ""}>
+                      <p className="text-[9px] font-semibold uppercase tracking-wider text-zinc-600">
+                        Criado
+                      </p>
+                      <p className="mt-1 text-[11px] text-zinc-400">
+                        {dateParts.day}
+                      </p>
+                    </div>
+                    {hidePaymentAndMoney ? (
+                      <div>
+                        <p className="text-[9px] font-semibold uppercase tracking-wider text-zinc-600">
+                          Hora
+                        </p>
+                        <p className="mt-1 text-[11px] tabular-nums text-zinc-400">
+                          {dateParts.time}
+                        </p>
+                      </div>
+                    ) : null}
+                  </div>
+                </button>
+                {!hidePaymentAndMoney ? (
+                  <div className="flex justify-end border-t border-white/[0.06] bg-black/15 px-3 py-2">
+                    <button
+                      type="button"
+                      onClick={(ev) => void handleListReceiptPrint(ev, o)}
+                      disabled={listReceiptPrintingId !== null}
+                      className="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-[11px] font-medium text-zinc-400 transition hover:bg-amber-400/10 hover:text-amber-200 disabled:pointer-events-none disabled:opacity-40"
+                    >
+                      <svg
+                        className="h-3.5 w-3.5"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth="1.75"
+                        aria-hidden
+                      >
+                        <path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v8H6z" />
+                      </svg>
+                      {listReceiptPrintingId === o.id
+                        ? "A preparar…"
+                        : "Emitir documento"}
+                    </button>
+                  </div>
+                ) : null}
+              </article>
+            );
+          })}
+        </div>
+
+        <div className="hidden overflow-x-auto rounded-2xl border border-white/[0.07] bg-zinc-900/25 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] ring-1 ring-white/[0.04] md:block">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.06] bg-zinc-950/40 px-4 py-2.5">
             <p className="text-[11px] text-zinc-500">
               <span className="font-semibold text-zinc-300">{visible.length}</span> linha
@@ -1690,7 +2186,6 @@ export default function AdminPedidosPage() {
                     </td>
                     <td className="px-4 py-3">
                       <p className="font-medium text-zinc-200">{o.client.name}</p>
-                      <p className="text-[11px] text-zinc-600">{o.client.email}</p>
                     </td>
                     <td className="px-4 py-3 align-top">
                       <span
@@ -1800,6 +2295,7 @@ export default function AdminPedidosPage() {
           </table>
           </div>
         </div>
+        </>
       )}
 
       {/* Painel de detalhe */}
@@ -1808,6 +2304,7 @@ export default function AdminPedidosPage() {
           order={selected}
           onClose={() => setSelected(null)}
           onStatusChange={handleStatusChange}
+          onReopen={handleReopenOrder}
           hidePaymentAndMoney={hidePaymentAndMoney}
         />
       )}

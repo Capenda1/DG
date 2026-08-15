@@ -14,5 +14,8 @@ export type SessionUser = {
    */
   mfaSetupRequired?: boolean;
   phone: string | null;
+  clientType?: 'INDIVIDUAL' | 'COMPANY' | null;
+  nif?: string | null;
+  active?: boolean;
   createdAt: Date;
 };
