@@ -130,7 +130,7 @@ export interface TwilioSmsSettings {
   accountSid: string;
   authToken: string;
   smsFrom: string;
-  /** Placeholders: {empresa}, {pedido}, {contacto}, {rodape} */
+  /** Placeholders: {cliente}, {empresa}, {pedido}, {contacto}, {rodape} */
   messageTemplate: string;
   oneWayFooter: string;
 }
@@ -158,7 +158,7 @@ export type TwilioSmsRuntimeConfig = {
 };
 
 export const DEFAULT_TWILIO_SMS_MESSAGE_TEMPLATE =
-  '{empresa}: o pedido {pedido} está finalizado e pronto para recolha.{contacto}{rodape}';
+  '{cliente}, o pedido {pedido} está finalizado e pronto para recolha.{contacto}{rodape}';
 
 export const DEFAULT_TWILIO_SMS_ONE_WAY_FOOTER =
   ' Canal informativo — não responda a este SMS.';

@@ -21,7 +21,7 @@ type StatusFilter = "" | "SENT" | "FAILED" | "PENDING";
 type TabId = "history" | "settings";
 
 const DEFAULT_TEMPLATE =
-  "{empresa}: o pedido {pedido} está finalizado e pronto para recolha.{contacto}{rodape}";
+  "{cliente}, o pedido {pedido} está finalizado e pronto para recolha.{contacto}{rodape}";
 
 const DEFAULT_FOOTER = " Canal informativo — não responda a este SMS.";
 
@@ -66,10 +66,11 @@ function formatDateTime(iso: string | null): string {
 function previewMessage(
   template: string,
   footer: string,
-  smsFrom: string,
+  _smsFrom: string,
 ): string {
   const contactLine = " Contacto: +244 923 000 000.";
   return template
+    .replace(/\{cliente\}/g, "Maria Silva")
     .replace(/\{empresa\}/g, "Gráfica Dádiva")
     .replace(/\{pedido\}/g, "DG-2026-00014")
     .replace(/\{contacto\}/g, contactLine)
@@ -451,7 +452,7 @@ export function AdminSmsHistory() {
                   rows={3}
                 />
                 <div className="mt-2 flex flex-wrap gap-2">
-                  {["{empresa}", "{pedido}", "{contacto}", "{rodape}"].map(
+                  {["{cliente}", "{empresa}", "{pedido}", "{contacto}", "{rodape}"].map(
                     (ph) => (
                       <span
                         key={ph}

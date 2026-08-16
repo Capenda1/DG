@@ -38,4 +38,15 @@ describe('buildOrderFinishedSmsBody', () => {
     expect(body).toContain('finalizado');
     expect(body).toContain('+244 923 865 632');
   });
+
+  it('usa o nome do cliente no placeholder {cliente}', () => {
+    const body = buildOrderFinishedSmsBody({
+      orderNumber: 'DG-2026-0042',
+      clientName: 'João Neto',
+      messageTemplate:
+        '{cliente}, o pedido {pedido} está finalizado e pronto para recolha.{contacto}{rodape}',
+    });
+    expect(body.startsWith('João Neto,')).toBe(true);
+    expect(body).not.toContain('{cliente}');
+  });
 });
