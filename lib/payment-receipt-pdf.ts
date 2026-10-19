@@ -23,6 +23,17 @@ export { loadReceiptLogoImage };
 import { formatMoney, formatMoneyReceiptCell } from "@/lib/format-money";
 import { receiptLineDescriptionFromOrderItem } from "@/lib/apparel-catalog";
 import { receiptShouldIncludeBankDetails, proFormaOmitsOrderStatus } from "@/lib/invoice-document-policy";
+import { contaPedidoPath } from "@/lib/routes";
+import type {
+  PaymentReceiptPdfFormat,
+  StoreReceiptPaperFormat,
+} from "@/lib/receipt-paper-formats";
+
+export type {
+  PaymentReceiptPdfFormat,
+  StoreReceiptPaperFormat,
+} from "@/lib/receipt-paper-formats";
+export { RECEIPT_PDF_FORMAT_LABELS } from "@/lib/receipt-paper-formats";
 
 type DocWithTable = jsPDF & {
   lastAutoTable?: { finalY: number };
@@ -38,6 +49,18 @@ const BLACK: [number, number, number] = [0, 0, 0];
 /** Mensagem ao cliente no rodapé do comprovante (abaixo do aviso sobre factura fiscal). */
 const RECEIPT_THANK_YOU_PT =
   "Obrigado pela preferência e volte sempre.";
+/** Site público impresso no QR das facturas. */
+export const INVOICE_SITE_ORIGIN = "https://graficadadiva.com";
+
+/** Destino do QR: a ficha deste pedido na área do cliente. */
+export function invoiceOrderPublicUrl(
+  orderId: string | null | undefined,
+): string {
+  const id = orderId?.trim() ?? "";
+  if (!id) return `${INVOICE_SITE_ORIGIN}/`;
+  return `${INVOICE_SITE_ORIGIN}${contaPedidoPath(id)}`;
+}
+
 /**
  * Folga (mm) entre o fim do logótipo e o nome da empresa — igual em retrato (A4/A5)
  * e em térmicas (80 mm = faixa larga, 58 mm = faixa estreita).
@@ -53,6 +76,170 @@ function moneyNum(v: unknown): number {
     return parseFloat(v.replace(",", ".")) || 0;
   }
   return Number(v) || 0;
+}
+
+function formatInvoiceDatePt(d: Date): string {
+  if (!Number.isFinite(d.getTime())) return "—";
+  return d.toLocaleDateString("pt-PT", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+}
+
+function addCalendarDays(d: Date, days: number): Date {
+  const next = new Date(d.getTime());
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+/** Inteiro em português europeu (pt-AO / pt-PT) — até milhões. */
+function integerToPortuguesePt(n: number): string {
+  const abs = Math.round(Math.abs(n));
+  if (abs === 0) return "zero";
+
+  const units = [
+    "",
+    "um",
+    "dois",
+    "três",
+    "quatro",
+    "cinco",
+    "seis",
+    "sete",
+    "oito",
+    "nove",
+  ];
+  const teens = [
+    "dez",
+    "onze",
+    "doze",
+    "treze",
+    "catorze",
+    "quinze",
+    "dezasseis",
+    "dezassete",
+    "dezoito",
+    "dezanove",
+  ];
+  const tens = [
+    "",
+    "",
+    "vinte",
+    "trinta",
+    "quarenta",
+    "cinquenta",
+    "sessenta",
+    "setenta",
+    "oitenta",
+    "noventa",
+  ];
+  const hundreds = [
+    "",
+    "cento",
+    "duzentos",
+    "trezentos",
+    "quatrocentos",
+    "quinhentos",
+    "seiscentos",
+    "setecentos",
+    "oitocentos",
+    "novecentos",
+  ];
+
+  const belowThousand = (x: number): string => {
+    if (x === 0) return "";
+    if (x === 100) return "cem";
+    const h = Math.floor(x / 100);
+    const r = x % 100;
+    const parts: string[] = [];
+    if (h > 0) parts.push(hundreds[h]!);
+    if (r === 0) return parts.join(" e ");
+    if (r < 10) parts.push(units[r]!);
+    else if (r < 20) parts.push(teens[r - 10]!);
+    else {
+      const t = Math.floor(r / 10);
+      const u = r % 10;
+      parts.push(u ? `${tens[t]} e ${units[u]}` : tens[t]!);
+    }
+    return parts.join(" e ");
+  };
+
+  if (abs < 1000) return belowThousand(abs);
+
+  const million = Math.floor(abs / 1_000_000);
+  const restMillion = abs % 1_000_000;
+  const thousand = Math.floor(restMillion / 1000);
+  const rest = restMillion % 1000;
+  const chunks: string[] = [];
+
+  if (million === 1) chunks.push("um milhão");
+  else if (million > 1) chunks.push(`${integerToPortuguesePt(million)} milhões`);
+
+  if (thousand === 1) chunks.push("mil");
+  else if (thousand > 1) chunks.push(`${belowThousand(thousand)} mil`);
+
+  if (rest > 0) chunks.push(belowThousand(rest));
+  if (chunks.length === 0) return "zero";
+  if (chunks.length === 1) return chunks[0]!;
+  const last = chunks[chunks.length - 1]!;
+  const head = chunks.slice(0, -1).join(" ");
+  return `${head} e ${last}`;
+}
+
+function kwanzasPorExtenso(amount: number): string {
+  const n = Math.round(Math.abs(amount));
+  const words = integerToPortuguesePt(n);
+  const cap = words.charAt(0).toUpperCase() + words.slice(1);
+  return n === 1 ? `${cap} kwanza` : `${cap} kwanzas`;
+}
+
+function metaString(
+  metadata: Record<string, unknown> | null | undefined,
+  keys: string[],
+): string {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return "";
+  }
+  for (const key of keys) {
+    const v = metadata[key];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return "";
+}
+
+function receiptItemSkuCode(item: {
+  skuCode?: string | null;
+  metadata?: Record<string, unknown> | null;
+}): string {
+  const fromField =
+    typeof item.skuCode === "string" ? item.skuCode.trim() : "";
+  if (fromField) return fromField;
+  return metaString(item.metadata, ["sku", "skuCode", "code"]) || "—";
+}
+
+function receiptItemUnit(item: {
+  metadata?: Record<string, unknown> | null;
+}): string {
+  const explicit = metaString(item.metadata, ["unit", "unitLabel", "areaUnit"]);
+  if (explicit) {
+    const u = explicit.toUpperCase();
+    if (u === "M" || u === "M2" || u === "M²") return "M2";
+    return u.slice(0, 4);
+  }
+  const md = item.metadata;
+  if (md && typeof md === "object" && !Array.isArray(md)) {
+    if (
+      md.pricingKind === "AREA" ||
+      md.areaM2 != null ||
+      md.widthMm != null ||
+      md.heightMm != null ||
+      md.pricePerM2 != null
+    ) {
+      return "M2";
+    }
+  }
+  return "UNI";
 }
 
 /** Modelo que separa pró-forma da factura‑recibo e da factura clássica. */
@@ -79,6 +266,13 @@ export const INVOICE_DOCUMENT_MODEL_OPTIONS: InvoiceDocumentModel[] = [
   "FACTURA_RECIBO",
   "FACTURA",
 ];
+
+/** Factura e Factura Pro-forma (A4 comercial). A Factura-recibo mantém o layout de comprovativo. */
+export function usesCommercialInvoiceLayout(
+  model: InvoiceDocumentModel,
+): boolean {
+  return model === "FACTURA" || model === "FACTURA_POR_FORMA";
+}
 
 /** Imagem pré-carregada para `jsPDF.addImage` (sem prefixo `data:`). */
 export type ReceiptEmbeddedLogo = EmbeddedLogoImage;
@@ -124,17 +318,32 @@ export type PaymentReceiptPdfPayload = {
   orderNumber: string;
   paidAtLabel: string;
   clientName: string;
-  /** NIF do cliente — só preenchido quando a conta é empresa. */
+  /** NIF do cliente — na factura‑recibo só preenchido quando a conta é empresa. */
   clientNif: string | null;
+  clientEmail: string | null;
   originLabel: string;
   currency: string;
-  /** Corpo da tabela: artigo, qtd, unitário, linha */
+  /** Corpo da tabela: artigo, qtd, unitário, linha (factura‑recibo). */
   tableBody: string[][];
+  /**
+   * Grelha comercial (Factura / Pro-forma): descrição, código, unid., qtd, preço, desc., total.
+   */
+  commercialTableBody: string[][];
   /** Soma das quantidades de todas as linhas. */
   articlesTotal: number;
   subtotalFmt: string;
   discountFmt: string;
   totalFmt: string;
+  /** Imposto liquidado — 0,00 enquanto o regime for isento. */
+  taxExemptFmt: string;
+  /** Total em kwanzas por extenso (Factura / Pro-forma). */
+  amountInWords: string;
+  /** Data de emissão (dd/mm/aaaa) para documentos comerciais. */
+  issuedAtDateLabel: string;
+  /** Data de vencimento — só Factura (emissão + 15 dias). */
+  dueAtDateLabel: string | null;
+  /** «Original» na Factura; omitido na pró-forma e no recibo. */
+  copyKind: string | null;
   paymentMethodLabel: string;
   receivedFmt: string | null;
   changeFmt: string | null;
@@ -153,6 +362,8 @@ export type PaymentReceiptPdfPayload = {
   receiptLogoImage: ReceiptEmbeddedLogo | null;
   /** Linha de certificação AGT no rodapé. */
   agtCertificationLine: string;
+  /** URL absoluta do QR — ficha do pedido em graficadadiva.com. */
+  orderPublicUrl: string;
 };
 
 const DEFAULT_SELLER_HEADER: ReceiptSellerHeader = {
@@ -407,7 +618,9 @@ export function buildPaymentReceiptFromOrderDetail(
   const currency = (order.currency ?? "AOA").toUpperCase();
   let gross = 0;
   let articlesTotal = 0;
-  const tableBody: string[][] = order.items.map((it) => {
+  const tableBody: string[][] = [];
+  const commercialTableBody: string[][] = [];
+  for (const it of order.items) {
     const up = moneyNum(it.unitPrice);
     const qty = Math.max(0, Number(it.quantity) || 0);
     articlesTotal += qty;
@@ -417,13 +630,22 @@ export function buildPaymentReceiptFromOrderDetail(
       it.productName,
       it.metadata ?? null,
     );
-    return [
+    tableBody.push([
       articleLabel,
       String(qty),
       formatMoneyReceiptCell(up, currency),
       formatMoneyReceiptCell(lineTotal, currency),
-    ];
-  });
+    ]);
+    commercialTableBody.push([
+      articleLabel,
+      receiptItemSkuCode(it),
+      receiptItemUnit(it),
+      String(qty),
+      formatMoneyReceiptCell(up, currency),
+      formatMoneyReceiptCell(0, currency),
+      formatMoneyReceiptCell(lineTotal, currency),
+    ]);
+  }
   gross = Math.round(gross * 100) / 100;
   articlesTotal = Math.round(articlesTotal * 1000) / 1000;
   const disc = Math.round(moneyNum(order.discountAmount) * 100) / 100;
@@ -492,7 +714,25 @@ export function buildPaymentReceiptFromOrderDetail(
   const isCompanyClient = order.client?.clientType === "COMPANY";
   const nifRaw =
     typeof order.client?.nif === "string" ? order.client.nif.trim() : "";
-  const clientNif = isCompanyClient ? nifRaw || "—" : null;
+  const commercialLayout = usesCommercialInvoiceLayout(documentModel);
+  const clientNif = commercialLayout
+    ? nifRaw || "—"
+    : isCompanyClient
+      ? nifRaw || "—"
+      : null;
+
+  const emailRaw =
+    typeof order.client?.email === "string" ? order.client.email.trim() : "";
+  const clientEmail = emailRaw || null;
+
+  const issuedAtDateLabel = Number.isFinite(referenceInstant.getTime())
+    ? formatInvoiceDatePt(referenceInstant)
+    : "—";
+  const dueAtDateLabel =
+    documentModel === "FACTURA" && Number.isFinite(referenceInstant.getTime())
+      ? formatInvoiceDatePt(addCalendarDays(referenceInstant, 15))
+      : null;
+  const copyKind = documentModel === "FACTURA" ? "Original" : null;
 
   const sellerHeader =
     opts?.sellerHeader ?? { ...DEFAULT_SELLER_HEADER };
@@ -505,13 +745,20 @@ export function buildPaymentReceiptFromOrderDetail(
     paidAtLabel,
     clientName: order.client?.name ?? "—",
     clientNif,
+    clientEmail,
     originLabel,
     currency,
     tableBody,
+    commercialTableBody,
     articlesTotal,
     subtotalFmt: formatMoney(gross, currency),
     discountFmt: formatMoney(disc, currency),
     totalFmt: formatMoney(total, currency),
+    taxExemptFmt: formatMoney(0, currency),
+    amountInWords: kwanzasPorExtenso(total),
+    issuedAtDateLabel,
+    dueAtDateLabel,
+    copyKind,
     paymentMethodLabel,
     receivedFmt,
     changeFmt,
@@ -522,6 +769,7 @@ export function buildPaymentReceiptFromOrderDetail(
     sellerBankFooterLines: opts?.sellerBankFooterLines ?? [],
     receiptLogoImage: opts?.receiptLogoImage ?? null,
     agtCertificationLine: opts?.agtCertificationLine?.trim() ?? "",
+    orderPublicUrl: invoiceOrderPublicUrl(order.id),
   };
 }
 
@@ -530,8 +778,7 @@ function invoiceTotalsSectionHeading(
   portraitSheet: boolean,
 ): string {
   if (model === "FACTURA_POR_FORMA") return "Totais";
-  if (model === "FACTURA")
-    return portraitSheet ? "Totais e liquidação" : "Totais";
+  if (model === "FACTURA") return "Totais";
   return portraitSheet ? "Resumo de pagamento" : "Resumo";
 }
 
@@ -552,6 +799,17 @@ function invoiceLegalFooterLine(
   return portraitSheet
     ? "Factura de cobrança; conserve para arquivo e apoio à contabilização."
     : "Factura nos termos aplicáveis.";
+}
+
+function buildCommercialInvoiceTotalsBody(
+  payload: PaymentReceiptPdfPayload,
+): string[][] {
+  return [
+    ["Total ilíquido", payload.subtotalFmt],
+    ["Desconto", payload.discountFmt],
+    ["Imposto (isento)", payload.taxExemptFmt],
+    ["Total (Kz)", payload.totalFmt],
+  ];
 }
 
 /** Nome sugerido para PDF (compatível com a maioria dos sistemas). */
@@ -673,32 +931,6 @@ function buildReceiptTotalsBody(
         ];
 }
 
-/** Layout do PDF — A4 com/sem marca; A5 P&B; térmicas 80 mm e 58 mm (58 com variante P&B forte). */
-export type PaymentReceiptPdfFormat =
-  | "A4"
-  | "A4_BW"
-  | "A5_BW"
-  | "THERMAL_80"
-  | "THERMAL_58"
-  | "THERMAL_58_BW";
-
-/** Valor guardado em Configurações (admin) pela API. */
-export type StoreReceiptPaperFormat = PaymentSettings["receiptPaperFormat"];
-
-export const RECEIPT_PDF_FORMAT_LABELS: Record<
-  PaymentReceiptPdfFormat,
-  string
-> = {
-  A4: "Folha A4 — texto «Dádiva Go» / total em âmbar; fundos brancos",
-  A4_BW:
-    "Folha A4 — preto sobre branco (sem cor de marca, só texto e linhas neutras)",
-  A5_BW: "Folha A5 — preto sobre branco (sem cinzas nem cor de marca)",
-  THERMAL_80: "Rolo térmico 80 mm (Bixolon, Epson…)",
-  THERMAL_58: "Rolo térmico 58 mm (estreita)",
-  THERMAL_58_BW:
-    "Rolo térmico 58 mm — só preto no branco (texto forte, bom contraste térmico)",
-};
-
 /** Ordens recomendadas no painel de configurações. */
 export const STORE_RECEIPT_PAPER_FORMAT_ORDER: StoreReceiptPaperFormat[] = [
   "THERMAL_80",
@@ -714,7 +946,7 @@ export const STORE_RECEIPT_PAPER_FORMAT_ORDER: StoreReceiptPaperFormat[] = [
 export function invoiceDocumentUsesA4Sheet(
   model: InvoiceDocumentModel,
 ): boolean {
-  return model === "FACTURA_POR_FORMA" || model === "FACTURA";
+  return usesCommercialInvoiceLayout(model);
 }
 
 function coerceStoreFormatToA4(
@@ -1208,6 +1440,31 @@ function resolveReceiptTableColWidths(
   return [artW, qtdW, moneyW, moneyW];
 }
 
+const COMMERCIAL_INVOICE_TABLE_HEAD = [
+  "Descrição",
+  "Cód.",
+  "Unid.",
+  "Qtd",
+  "Preço",
+  "Desc.",
+  "Total",
+];
+
+function resolveCommercialInvoiceColWidths(
+  contentW: number,
+  wide: boolean,
+): [number, number, number, number, number, number, number] {
+  const unit = wide ? 13 : 11;
+  const qty = wide ? 13 : 11;
+  const disc = wide ? 17 : 13;
+  const code = wide ? 28 : 18;
+  const price = wide ? 24 : 18;
+  const total = wide ? 26 : 18;
+  const fixed = unit + qty + disc + code + price + total;
+  const desc = Math.max(wide ? 44 : 28, contentW - fixed - 1);
+  return [desc, code, unit, qty, price, disc, total];
+}
+
 export type OpenReceiptPrintOptions = {
   /**
    * Força formato concreto. Omitido → lê `receiptPaperFormat` nas Configurações (API).
@@ -1231,6 +1488,118 @@ export function isCoarseMobileOrNarrowViewport(): boolean {
   return uaMobile || narrow;
 }
 
+type InvoiceQrMatrix = {
+  count: number;
+  runs: Array<{ row: number; col: number; len: number }>;
+};
+
+type InvoiceQrAsset =
+  | { kind: "matrix"; qr: InvoiceQrMatrix }
+  | { kind: "png"; dataUrl: string };
+
+type QrCreateFn = (
+  text: string,
+  options?: { errorCorrectionLevel?: string },
+) => {
+  modules: {
+    size: number;
+    get: (row: number, col: number) => number | boolean;
+  };
+};
+
+function invoiceQrMatrixFromCreate(
+  create: QrCreateFn,
+  url: string,
+): InvoiceQrMatrix | null {
+  const qr = create(url, { errorCorrectionLevel: "M" });
+  const count = qr.modules.size;
+  if (!count || count < 21) return null;
+  const runs: InvoiceQrMatrix["runs"] = [];
+  for (let row = 0; row < count; row += 1) {
+    let start = -1;
+    for (let col = 0; col <= count; col += 1) {
+      const dark = col < count && Boolean(qr.modules.get(row, col));
+      if (dark && start === -1) start = col;
+      if (!dark && start !== -1) {
+        runs.push({ row, col: start, len: col - start });
+        start = -1;
+      }
+    }
+  }
+  return runs.length > 0 ? { count, runs } : null;
+}
+
+async function resolveInvoiceQrAsset(
+  url: string,
+): Promise<InvoiceQrAsset | null> {
+  try {
+    const mod = (await import("qrcode")) as {
+      create?: QrCreateFn;
+      toDataURL?: (
+        text: string,
+        options?: Record<string, unknown>,
+      ) => Promise<string>;
+      default?: {
+        create?: QrCreateFn;
+        toDataURL?: (
+          text: string,
+          options?: Record<string, unknown>,
+        ) => Promise<string>;
+      };
+    };
+    const create = mod.create ?? mod.default?.create;
+    if (typeof create === "function") {
+      const matrix = invoiceQrMatrixFromCreate(create, url);
+      if (matrix) return { kind: "matrix", qr: matrix };
+    }
+    const toDataURL = mod.toDataURL ?? mod.default?.toDataURL;
+    if (typeof toDataURL === "function") {
+      const dataUrl = await toDataURL(url, {
+        errorCorrectionLevel: "M",
+        margin: 1,
+        width: 320,
+        color: { dark: "#000000", light: "#FFFFFF" },
+      });
+      if (dataUrl?.startsWith("data:image")) {
+        return { kind: "png", dataUrl };
+      }
+    }
+  } catch {
+    /* QR é complementar — a factura continua a emitir-se. */
+  }
+  return null;
+}
+
+function paintInvoiceSiteQr(
+  doc: jsPDF,
+  asset: InvoiceQrAsset,
+  x: number,
+  y: number,
+  size: number,
+): number {
+  const pad =
+    asset.kind === "matrix"
+      ? Math.max(1.6, (size / asset.qr.count) * 4)
+      : 1.6;
+  doc.setFillColor(255, 255, 255);
+  doc.rect(x - pad, y - pad, size + pad * 2, size + pad * 2, "F");
+  if (asset.kind === "matrix") {
+    const cell = size / asset.qr.count;
+    doc.setFillColor(0, 0, 0);
+    for (const run of asset.qr.runs) {
+      doc.rect(
+        x + run.col * cell,
+        y + run.row * cell,
+        run.len * cell + 0.05,
+        cell + 0.05,
+        "F",
+      );
+    }
+  } else {
+    doc.addImage(asset.dataUrl, "PNG", x, y, size, size);
+  }
+  return y + size + pad;
+}
 
 function triggerPdfBlobDownload(blob: Blob, filename: string): void {
   const href = URL.createObjectURL(blob);
@@ -1321,9 +1690,12 @@ async function renderPaymentReceiptDoc(
   payload: PaymentReceiptPdfPayload,
   format: PaymentReceiptPdfFormat,
 ): Promise<jsPDF> {
-  const [{ jsPDF }, autoTableImport] = await Promise.all([
+  const [{ jsPDF }, autoTableImport, invoiceQr] = await Promise.all([
     import("jspdf"),
     import("jspdf-autotable"),
+    resolveInvoiceQrAsset(
+      payload.orderPublicUrl?.trim() || invoiceOrderPublicUrl(null),
+    ),
   ]);
 
   const at =
@@ -1404,6 +1776,9 @@ async function renderPaymentReceiptDoc(
 
     if (L.portraitSheet) {
       const sectionHead = portraitHead;
+      const commercialLayout = usesCommercialInvoiceLayout(
+        payload.documentModel,
+      );
 
       y = paintPortraitTopStrip(
         doc,
@@ -1479,7 +1854,10 @@ async function renderPaymentReceiptDoc(
         doc.text(wrapped, margin, yL);
         yL += wrapped.length * 3.65;
       }
-      if (payload.sellerBankFooterLines.length > 0) {
+      if (
+        !commercialLayout &&
+        payload.sellerBankFooterLines.length > 0
+      ) {
         yL += widePortraitSheet ? 1.35 : 1.1;
         for (const ln of payload.sellerBankFooterLines) {
           const wrapped = doc.splitTextToSize(ln, leftW);
@@ -1513,7 +1891,20 @@ async function renderPaymentReceiptDoc(
       doc.text(natOne, margin, yL);
       yL += natOne.length * 3.45 + (widePortraitSheet ? 2 : 1.75);
 
-      const dateShort = doc.splitTextToSize(paidAtDisplayed, rightW - 2 * padR);
+      const dateShort = commercialLayout
+        ? [
+            `Emissão: ${payload.issuedAtDateLabel}`,
+            ...(payload.dueAtDateLabel
+              ? [`Vencimento: ${payload.dueAtDateLabel}`]
+              : []),
+            ...(payload.copyKind ? [payload.copyKind] : []),
+          ].flatMap((ln) =>
+            doc.splitTextToSize(ln, rightW - 2 * padR) as string[],
+          )
+        : (doc.splitTextToSize(
+            paidAtDisplayed,
+            rightW - 2 * padR,
+          ) as string[]);
       const dateLinesCount = Math.max(dateShort.length, 1);
 
       const ptToMm = 25.4 / 72;
@@ -1665,6 +2056,9 @@ async function renderPaymentReceiptDoc(
             ? ([["NIF", payload.clientNif]] as string[][])
             : []),
           ["Telefone", payload.clientPhone ?? "—"],
+          ...(commercialLayout && payload.clientEmail
+            ? ([["E-mail", payload.clientEmail]] as string[][])
+            : []),
         ],
         theme: "plain",
         showHead: "never",
@@ -1966,18 +2360,28 @@ async function renderPaymentReceiptDoc(
     );
     bumpThermalMm(y);
 
-    const totalsBody = buildReceiptTotalsBody(
-      payload,
-      L.portraitSheet,
-      narrowThermal58,
+    const commercialLayout = usesCommercialInvoiceLayout(
+      payload.documentModel,
     );
+    const totalsBody =
+      commercialLayout && L.portraitSheet
+        ? buildCommercialInvoiceTotalsBody(payload)
+        : buildReceiptTotalsBody(
+            payload,
+            L.portraitSheet,
+            narrowThermal58,
+          );
 
     const [cw0, cw1, cw2, cw3] = resolveReceiptTableColWidths(L);
     const moneyTableFs = thermalRoll
       ? Math.max(L.tableFs - 0.55, 5.85)
       : L.tableFs;
+    const commercialBody = payload.commercialTableBody;
+    const useCommercialTable =
+      commercialLayout && L.portraitSheet && commercialBody.length > 0;
+    const useReceiptTable = !useCommercialTable && payload.tableBody.length > 0;
 
-    if (payload.tableBody.length > 0) {
+    if (useCommercialTable || useReceiptTable) {
       y = portraitHead(y, "Artigos");
       y += L.portraitSheet ? 1.15 : -0.65;
       const headFill: [number, number, number] =
@@ -1996,52 +2400,106 @@ async function renderPaymentReceiptDoc(
           : L.portraitSheet
             ? [252, 252, 254]
             : [255, 255, 255];
-      at(doc, {
+      const tableCommon = {
         startY: y,
-        head: [L.tableHead],
-        body: payload.tableBody,
         styles: {
-          fontSize: L.tableFs,
-          cellPadding: L.tablePad,
+          fontSize: useCommercialTable
+            ? Math.max(L.tableFs - 0.55, 7.15)
+            : L.tableFs,
+          cellPadding: useCommercialTable
+            ? { top: 1.65, bottom: 1.65, left: 1.2, right: 1.2 }
+            : L.tablePad,
           textColor: ink,
-          overflow: "linebreak",
-          valign: "middle",
+          overflow: "linebreak" as const,
+          valign: "middle" as const,
         },
         headStyles: {
           fillColor: headFill,
           textColor: headInk,
           lineColor: tableLineRgb,
           lineWidth: thermalRoll ? 0.12 : L.portraitSheet ? 0.1 : 0.11,
-          fontStyle: "bold",
-          halign: "center",
-          valign: "middle",
+          fontStyle: "bold" as const,
+          halign: "center" as const,
+          valign: "middle" as const,
         },
         alternateRowStyles: { fillColor: altRow },
         margin: { left: margin, right: margin },
-        columnStyles: {
-          0: {
-            cellWidth: cw0,
-            valign: "middle",
-            overflow: "linebreak",
-          },
-          1: { cellWidth: cw1, halign: "center", valign: "middle" },
-          2: {
-            cellWidth: cw2,
-            halign: "right",
-            valign: "middle",
-            fontSize: moneyTableFs,
-          },
-          3: {
-            cellWidth: cw3,
-            halign: "right",
-            valign: "middle",
-            fontSize: moneyTableFs,
-            fontStyle: "bold",
-          },
-        },
         tableLineColor: tableLineRgb,
         tableLineWidth: thermalRoll ? 0.12 : 0.095,
-      });
+      };
+      if (useCommercialTable) {
+        const contentW = pageW - 2 * margin;
+        const [d0, d1, d2, d3, d4, d5, d6] =
+          resolveCommercialInvoiceColWidths(contentW, widePortraitSheet);
+        at(doc, {
+          ...tableCommon,
+          tableWidth: contentW,
+          head: [COMMERCIAL_INVOICE_TABLE_HEAD],
+          body: commercialBody,
+          columnStyles: {
+            0: {
+              cellWidth: d0,
+              valign: "middle",
+              overflow: "linebreak",
+              halign: "left",
+            },
+            1: {
+              cellWidth: d1,
+              halign: "center",
+              valign: "middle",
+              fontSize: Math.max(moneyTableFs - 0.4, 6.4),
+            },
+            2: { cellWidth: d2, halign: "center", valign: "middle" },
+            3: { cellWidth: d3, halign: "center", valign: "middle" },
+            4: {
+              cellWidth: d4,
+              halign: "right",
+              valign: "middle",
+              fontSize: moneyTableFs,
+            },
+            5: {
+              cellWidth: d5,
+              halign: "right",
+              valign: "middle",
+              fontSize: moneyTableFs,
+            },
+            6: {
+              cellWidth: d6,
+              halign: "right",
+              valign: "middle",
+              fontSize: moneyTableFs,
+              fontStyle: "bold",
+            },
+          },
+        });
+      } else {
+        at(doc, {
+          ...tableCommon,
+          head: [L.tableHead],
+          body: payload.tableBody,
+          columnStyles: {
+            0: {
+              cellWidth: cw0,
+              valign: "middle",
+              overflow: "linebreak",
+            },
+            1: { cellWidth: cw1, halign: "center", valign: "middle" },
+            2: {
+              cellWidth: cw2,
+              halign: "right",
+              valign: "middle",
+              fontSize: moneyTableFs,
+            },
+            3: {
+              cellWidth: cw3,
+              halign: "right",
+              valign: "middle",
+              fontSize: moneyTableFs,
+              fontStyle: "bold",
+            },
+          },
+        });
+      }
       y = (doc as DocWithTable).lastAutoTable?.finalY ?? y + 40;
       bumpThermalMm(y);
     } else {
@@ -2088,8 +2546,18 @@ async function renderPaymentReceiptDoc(
         lineWidth: 0,
       },
       columnStyles: {
-        0: { cellWidth: L.totalsLabelW, fontStyle: "normal" },
-        1: { cellWidth: L.totalsValW, halign: "right" },
+        0: {
+          cellWidth:
+            commercialLayout && L.portraitSheet
+              ? pageW - 2 * margin - 62
+              : L.totalsLabelW,
+          fontStyle: "normal",
+        },
+        1: {
+          cellWidth:
+            commercialLayout && L.portraitSheet ? 62 : L.totalsValW,
+          halign: "right",
+        },
       },
       margin: { left: margin, right: margin },
       didParseCell: (data) => {
@@ -2099,7 +2567,8 @@ async function renderPaymentReceiptDoc(
         const isMainTotal =
           left === "Total pago" ||
           left === "Total" ||
-          left === "Total (por forma)";
+          left === "Total (por forma)" ||
+          left === "Total (Kz)";
         if (L.portraitSheet && !isMainTotal && left !== "Troco") {
           const stripeA: [number, number, number] =
             L.brandColor && !L.pureMonochromeBlack
@@ -2134,6 +2603,84 @@ async function renderPaymentReceiptDoc(
     y = (doc as DocWithTable).lastAutoTable?.finalY ?? y + 40;
     bumpThermalMm(y);
     y += L.portraitSheet ? 5 : 3.85;
+
+    if (commercialLayout && L.portraitSheet) {
+      doc.setFont("helvetica", "italic");
+      doc.setFontSize(Math.max(L.lvFs - 0.35, 7.35));
+      doc.setTextColor(...ink);
+      const extenso = doc.splitTextToSize(
+        `Valor por extenso: ${payload.amountInWords}.`,
+        pageW - 2 * margin,
+      );
+      doc.text(extenso, margin, y);
+      doc.setFont("helvetica", "normal");
+      y +=
+        (Array.isArray(extenso) ? extenso.length : 1) *
+          (widePortraitSheet ? 4.15 : 3.85) +
+        2.4;
+
+      if (payload.documentModel === "FACTURA") {
+        doc.setFont("helvetica", "italic");
+        doc.setFontSize(Math.max(L.metaFs - 0.2, 6.95));
+        doc.setTextColor(...inkMuted);
+        const supply = doc.splitTextToSize(
+          "Os bens/serviços foram colocados à disposição do adquirente na data de emissão.",
+          pageW - 2 * margin,
+        );
+        doc.text(supply, margin, y);
+        doc.setFont("helvetica", "normal");
+        y +=
+          (Array.isArray(supply) ? supply.length : 1) *
+            (widePortraitSheet ? 4.05 : 3.75) +
+          2.2;
+      }
+
+      if (payload.sellerBankFooterLines.length > 0) {
+        y = portraitHead(y, "Dados bancários");
+        y += 1.05;
+        const padBank = widePortraitSheet ? 3.4 : 3;
+        const innerBankW = pageW - 2 * margin - padBank * 2;
+        const bankLines: string[] = [];
+        for (const ln of payload.sellerBankFooterLines) {
+          const wrapped = doc.splitTextToSize(ln, innerBankW);
+          if (Array.isArray(wrapped)) bankLines.push(...wrapped);
+          else bankLines.push(String(wrapped));
+        }
+        const bankLh = widePortraitSheet ? 4.15 : 3.85;
+        const boxH = padBank * 2 + Math.max(bankLines.length, 1) * bankLh;
+        const bankFill: [number, number, number] = L.pureMonochromeBlack
+          ? [255, 255, 255]
+          : L.brandColor
+            ? [254, 251, 246]
+            : [250, 250, 252];
+        doc.setFillColor(...bankFill);
+        doc.setDrawColor(
+          ...(L.brandColor && !L.pureMonochromeBlack ? BRAND : lineDraw),
+        );
+        doc.setLineWidth(
+          L.brandColor && !L.pureMonochromeBlack ? 0.28 : 0.2,
+        );
+        doc.roundedRect(
+          margin,
+          y,
+          pageW - 2 * margin,
+          boxH,
+          2,
+          2,
+          "FD",
+        );
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(Math.max(L.metaFs, 7.2));
+        doc.setTextColor(...ink);
+        let by = y + padBank + 3.1;
+        for (const ln of bankLines) {
+          doc.text(ln, margin + padBank, by);
+          by += bankLh;
+        }
+        y += boxH + (widePortraitSheet ? 4.2 : 3.6);
+      }
+      bumpThermalMm(y);
+    }
 
     if (payload.attendantLine) {
       doc.setFontSize(L.attendantTitleFs);
@@ -2170,6 +2717,12 @@ async function renderPaymentReceiptDoc(
         thermalRoll ? THERM_BW_LINE : L.pureMonochromeBlack ? BLACK : undefined,
       ) - (L.portraitSheet ? 0 : 1);
     bumpThermalMm(y);
+
+    const qrSize = L.portraitSheet ? (widePortraitSheet ? 28 : 24) : 24;
+    const qrOnRight = Boolean(invoiceQr) && L.portraitSheet;
+    const qrColW = qrOnRight ? qrSize + 6.5 : 0;
+    const footerTextW = Math.max(32, pageW - 2 * margin - qrColW);
+
     doc.setFontSize(L.footFs);
     doc.setTextColor(...inkMuted);
     doc.setFont("helvetica", "italic");
@@ -2177,7 +2730,7 @@ async function renderPaymentReceiptDoc(
       payload.documentModel,
       L.portraitSheet,
     );
-    const foot = doc.splitTextToSize(footTxt, pageW - 2 * margin);
+    const foot = doc.splitTextToSize(footTxt, footerTextW);
     const lhFactor =
       typeof doc.getLineHeightFactor === "function"
         ? doc.getLineHeightFactor()
@@ -2202,7 +2755,7 @@ async function renderPaymentReceiptDoc(
     );
     const thanksLines = doc.splitTextToSize(
       RECEIPT_THANK_YOU_PT,
-      pageW - 2 * margin,
+      footerTextW,
     );
     const thanksLhMm = Math.max(
       (doc.getFontSize() / 72) *
@@ -2214,6 +2767,29 @@ async function renderPaymentReceiptDoc(
     doc.setFontSize(L.footFs);
     doc.setFont("helvetica", "normal");
     let tailY = thanksY + thanksLines.length * thanksLhMm;
+
+    if (invoiceQr && qrOnRight) {
+      const qrX = pageW - margin - qrSize;
+      const qrY = y - 2.6;
+      const qrBottom = paintInvoiceSiteQr(
+        doc,
+        invoiceQr,
+        qrX,
+        qrY,
+        qrSize,
+      );
+      tailY = Math.max(tailY, qrBottom);
+    } else if (invoiceQr) {
+      const qrX = margin + (pageW - 2 * margin - qrSize) / 2;
+      tailY = paintInvoiceSiteQr(
+        doc,
+        invoiceQr,
+        qrX,
+        tailY + (thermalRoll ? 2.2 : 2.6),
+        qrSize,
+      );
+    }
+
     if (payload.agtCertificationLine?.trim()) {
       const agtY = paintJsPdfAgtCertification(
         doc,

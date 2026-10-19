@@ -348,7 +348,7 @@ describe('OrdersService', () => {
     expect(prisma.order.update).toHaveBeenCalled();
   });
 
-  it('atendente não pode VALIDATION_PAYMENT → APPROVED', async () => {
+  it('atendente pode VALIDATION_PAYMENT → APPROVED', async () => {
     prisma.order.findUnique.mockResolvedValue({
       id: 'order-1',
       status: OrderStatus.VALIDATION_PAYMENT,
@@ -357,15 +357,18 @@ describe('OrdersService', () => {
       paymentMethod: PaymentMethod.BANK_TRANSFER_SAME,
       paymentProofKey: 'key.pdf',
     });
+    prisma.order.update.mockResolvedValue({
+      id: 'order-1',
+      status: OrderStatus.APPROVED,
+    });
+    prisma.auditLog.create.mockResolvedValue({});
 
-    await expect(
-      service.changeStatus('order-1', OrderStatus.APPROVED, {
-        id: 'att-1',
-        role: UserRole.ATTENDANT,
-      }),
-    ).rejects.toBeInstanceOf(BadRequestException);
+    await service.changeStatus('order-1', OrderStatus.APPROVED, {
+      id: 'att-1',
+      role: UserRole.ATTENDANT,
+    });
 
-    expect(prisma.order.update).not.toHaveBeenCalled();
+    expect(prisma.order.update).toHaveBeenCalled();
   });
 
   it('designer atribuído pode VALIDATION_PAYMENT → APPROVED', async () => {

@@ -8,7 +8,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "smoke": "node deploy/smoke-go-live.mjs"
+    "smoke": "node deploy/smoke-go-live.mjs",
+    "lona:qr:verify": "node scripts/verify-lona-qr.mjs",
+    "lona:info": "npm run lona:qr:verify && node scripts/build-lona-informativa-pdf.mjs"
   },
   "dependencies": {
     "animejs": "^4.4.1",
@@ -19,6 +21,7 @@
     "jszip": "^3.10.1",
     "next": "16.2.2",
     "next-themes": "^0.4.6",
+    "qrcode": "^1.5.4",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "recharts": "^3.8.1",
@@ -31,6 +34,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.2",
+    "jsqr": "^1.4.0",
     "tailwindcss": "^4.2.2",
     "typescript": "^5"
   }

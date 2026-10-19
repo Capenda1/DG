@@ -8,7 +8,7 @@ import type {
   SmtpMailSettings,
 } from "@/lib/api-client";
 import { loginBackgroundDisplayUrl } from "@/lib/login-branding";
-import { RECEIPT_PDF_FORMAT_LABELS } from "@/lib/payment-receipt-pdf";
+import { RECEIPT_PDF_FORMAT_LABELS } from "@/lib/receipt-paper-formats";
 import {
   BankMethodCard,
   Field,

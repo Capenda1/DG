@@ -2,10 +2,12 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type {
   MailProvider,
+  OrderCustomerNotifyMailPayload,
   PasswordResetCodeMailPayload,
   SendMailPayload,
 } from './mail.types';
 import { resolveMailProvider } from './mail-provider.util';
+import { buildOrderCustomerNotifyMail } from './order-customer-notify-email.template';
 import { buildPasswordResetCodeMail } from './password-reset-code.template';
 import { MailConfigService } from './mail-config.service';
 import { SmtpMailService } from './smtp-mail.service';
@@ -45,6 +47,29 @@ export class MailService {
       code: payload.code,
       appName,
       expiresMinutes,
+    });
+
+    await this.sendMail({
+      to: payload.to,
+      subject: content.subject,
+      html: content.html,
+      text: content.text,
+    });
+  }
+
+  async sendOrderCustomerNotifyEmail(
+    payload: OrderCustomerNotifyMailPayload,
+  ): Promise<void> {
+    const fallbackApp =
+      payload.appName?.trim() ||
+      this.config.get<string>('mail.appName') ||
+      'Gráfica Dádiva';
+    const appName = await this.mailConfig.getAppName(fallbackApp);
+    const content = buildOrderCustomerNotifyMail({
+      recipientName: payload.recipientName,
+      orderNumber: payload.orderNumber,
+      businessPhone: payload.businessPhone,
+      appName,
     });
 
     await this.sendMail({

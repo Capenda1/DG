@@ -16,6 +16,7 @@ import {
 import { loadSession } from "@/lib/auth-session";
 import { ROUTES } from "@/lib/routes";
 import { displayPhoneAsMask } from "@/lib/whatsapp-mask";
+import { useAnimatedConfirm } from "@/components/providers/AnimatedConfirmProvider";
 
 type StatusFilter = "" | "SENT" | "FAILED" | "PENDING";
 type TabId = "history" | "settings";
@@ -87,6 +88,7 @@ function labelClass() {
 }
 
 export function AdminSmsHistory() {
+  const confirmAction = useAnimatedConfirm();
   const isAdmin = loadSession()?.user?.role === "ADMIN";
 
   const [tab, setTab] = useState<TabId>("history");
@@ -157,7 +159,11 @@ export function AdminSmsHistory() {
     if (!isAdmin) return;
     try {
       const s = await fetchTwilioSmsSettings();
-      setTwilioSettings(s);
+      setTwilioSettings({
+        ...s,
+        enabled: s.enabled || Boolean(s.accountSid && s.hasAuthToken),
+        sendMode: s.sendMode === "automatic" ? "automatic" : "manual",
+      });
     } catch {
       setTwilioSettings(null);
     }
@@ -194,7 +200,15 @@ export function AdminSmsHistory() {
 
   const handleDeleteOne = async (id: string) => {
     if (!isAdmin) return;
-    if (!window.confirm("Eliminar este registo SMS?")) return;
+    const ok = await confirmAction({
+      title: "Eliminar SMS",
+      message: "Queres remover este registo do histórico?",
+      hint: "O SMS já enviado ao cliente não é anulado.",
+      confirmLabel: "Eliminar",
+      cancelLabel: "Cancelar",
+      destructive: true,
+    });
+    if (!ok) return;
     setDeleting(true);
     try {
       await deleteSmsNotification(id);
@@ -209,13 +223,16 @@ export function AdminSmsHistory() {
 
   const handleDeleteSelected = async () => {
     if (!isAdmin || selectedIds.size === 0) return;
-    if (
-      !window.confirm(
-        `Eliminar ${selectedIds.size} registo(s) SMS? Esta acção não pode ser desfeita.`,
-      )
-    ) {
-      return;
-    }
+    const n = selectedIds.size;
+    const ok = await confirmAction({
+      title: "Eliminar registos",
+      message: `Remover ${n} registo${n === 1 ? "" : "s"} do histórico de SMS?`,
+      hint: "Esta acção não pode ser desfeita. Os SMS já enviados não são anulados.",
+      confirmLabel: n === 1 ? "Eliminar" : `Eliminar ${n}`,
+      cancelLabel: "Cancelar",
+      destructive: true,
+    });
+    if (!ok) return;
     setDeleting(true);
     try {
       await deleteSmsNotificationsBulk([...selectedIds]);
@@ -232,12 +249,18 @@ export function AdminSmsHistory() {
     setSettingsSaving(true);
     setSettingsMsg(null);
     try {
+      const credsReady = Boolean(
+        twilioSettings.accountSid.trim() &&
+          (twilioSettings.hasAuthToken || authTokenInput.trim()) &&
+          twilioSettings.smsFrom.trim(),
+      );
       const payload: Parameters<typeof adminUpdateTwilioSmsSettings>[0] = {
-        enabled: twilioSettings.enabled,
+        enabled: twilioSettings.enabled || credsReady,
         accountSid: twilioSettings.accountSid,
         smsFrom: twilioSettings.smsFrom,
         messageTemplate: twilioSettings.messageTemplate,
         oneWayFooter: twilioSettings.oneWayFooter,
+        sendMode: twilioSettings.sendMode,
       };
       if (authTokenInput.trim()) {
         payload.authToken = authTokenInput.trim();
@@ -273,11 +296,12 @@ export function AdminSmsHistory() {
           Comunicações
         </p>
         <h1 className="mt-1 text-2xl font-bold tracking-tight text-white sm:text-3xl">
-          SMS · Pedido finalizado
+          SMS · Avisos ao cliente
         </h1>
         <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-400">
-          Avisos automáticos via Twilio quando o pedido passa a{" "}
-          <strong className="font-medium text-zinc-200">Finalizado</strong>.
+          {(twilioSettings?.sendMode ?? twilioStatus?.sendMode) === "automatic"
+            ? "Modo automático: o cliente recebe SMS quando o pedido passa a Finalizado. Podes também enviar no painel do pedido."
+            : "Modo manual: o SMS só é enviado no painel do pedido (Avisar cliente). Controla o custo ao evitar envios automáticos."}{" "}
           {twilioStatus?.enabled ? (
             <>
               {" "}
@@ -291,7 +315,13 @@ export function AdminSmsHistory() {
               ) : null}
             </>
           ) : (
-            <> Twilio inactivo — configura na secção abaixo.</>
+            <>
+              {" "}
+              Twilio inactivo
+              {twilioStatus?.missing?.length
+                ? `: ${twilioStatus.missing[0]}`
+                : " — completa Auth Token, liga «Twilio activo» e guarda."}
+            </>
           )}
         </p>
       </header>
@@ -361,21 +391,66 @@ export function AdminSmsHistory() {
                     de ambiente.
                   </p>
                 </div>
-                <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-white/10 bg-black/25 px-3 py-2">
-                  <input
-                    type="checkbox"
-                    checked={twilioSettings.enabled}
-                    onChange={(e) =>
-                      setTwilioSettings((s) =>
-                        s ? { ...s, enabled: e.target.checked } : s,
-                      )
-                    }
-                    className="h-4 w-4 rounded border-zinc-600 accent-amber-400"
-                  />
-                  <span className="text-sm font-medium text-zinc-200">
-                    Twilio activo (base de dados)
-                  </span>
-                </label>
+                <div className="flex flex-col items-end gap-2">
+                  <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-white/10 bg-black/25 px-3 py-2">
+                    <input
+                      type="checkbox"
+                      checked={twilioSettings.enabled}
+                      onChange={(e) =>
+                        setTwilioSettings((s) =>
+                          s ? { ...s, enabled: e.target.checked } : s,
+                        )
+                      }
+                      className="h-4 w-4 rounded border-zinc-600 accent-amber-400"
+                    />
+                    <span className="text-sm font-medium text-zinc-200">
+                      Twilio activo
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-amber-400/20 bg-amber-400/[0.06] p-4">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-300/85">
+                  Envio de SMS
+                </p>
+                <p className="mt-1 max-w-2xl text-sm text-zinc-400">
+                  Escolhe se o aviso parte sozinho ao finalizar o pedido, ou só
+                  quando a equipa clica em «Enviar SMS».
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {(
+                    [
+                      ["manual", "Manual"],
+                      ["automatic", "Automático"],
+                    ] as const
+                  ).map(([id, label]) => {
+                    const active = twilioSettings.sendMode === id;
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() =>
+                          setTwilioSettings((s) =>
+                            s ? { ...s, sendMode: id } : s,
+                          )
+                        }
+                        className={`rounded-xl px-4 py-2.5 text-sm font-semibold transition ${
+                          active
+                            ? "bg-amber-400 text-zinc-950 shadow-lg shadow-amber-500/20"
+                            : "border border-white/10 bg-black/25 text-zinc-300 hover:bg-white/[0.06]"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="mt-2 text-[11px] text-zinc-500">
+                  {twilioSettings.sendMode === "automatic"
+                    ? "Ao marcar o pedido como Finalizado, o sistema envia o SMS (se o telefone for válido e o Twilio estiver activo)."
+                    : "Nenhum SMS automático. Usa Admin → Pedidos → Avisar cliente."}
+                </p>
               </div>
 
               <div className="grid gap-4 lg:grid-cols-2">
@@ -407,6 +482,12 @@ export function AdminSmsHistory() {
                     }
                     autoComplete="new-password"
                   />
+                  {!twilioSettings.hasAuthToken && !authTokenInput.trim() ? (
+                    <p className="mt-1 text-[11px] text-amber-300/90">
+                      Sem este token o SMS fica inactivo. Copia o Auth Token em
+                      console.twilio.com e guarda.
+                    </p>
+                  ) : null}
                 </div>
                 <div>
                   <label className={labelClass()}>Remetente (Sender ID)</label>
@@ -592,7 +673,10 @@ export function AdminSmsHistory() {
             <div className="rounded-2xl border border-dashed border-white/10 py-16 text-center">
               <p className="text-sm text-zinc-500">Nenhum SMS registado ainda.</p>
               <p className="mt-1 text-xs text-zinc-600">
-                Marca um pedido como Finalizado para gerar o primeiro envio.
+                {(twilioSettings?.sendMode ?? twilioStatus?.sendMode) ===
+                "automatic"
+                  ? "Marca um pedido como Finalizado, ou usa «Avisar cliente» no pedido."
+                  : "Abre um pedido em Admin → Pedidos e usa «Avisar cliente» → Enviar SMS."}
               </p>
             </div>
           ) : (

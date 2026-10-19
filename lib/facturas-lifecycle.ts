@@ -30,7 +30,7 @@ export const FACTURA_LIFECYCLE_STAGES: FacturaLifecycleStage[] = [
     shortTitle: "Factura-Pro-Forma",
     actionLabel: "Editar / visualizar",
     subtitle: "Documento de proposta",
-    body: "Rascunho de proposta. Não movimenta stock nem gera obrigações fiscais imediatas. Pode ser reemitida ou convertida numa factura oficial.",
+    body: "Fica nos rascunhos e não entra na fila de pedidos. Não movimenta stock. Pode ser reemitida ou convertida numa factura oficial.",
     transitionToNext: "Conversão",
     editable: true,
     closedAfterIssue: false,
@@ -111,5 +111,37 @@ export function orderHasProForma(order: {
   return (
     order.lastDocumentModel === "FACTURA_POR_FORMA" &&
     Boolean(order.lastDocumentNumber?.trim())
+  );
+}
+
+/** Fases em que a pró-forma ainda é proposta, antes de entrar em produção. */
+const PROFORMA_PENDING_STATUSES = new Set([
+  "DRAFT",
+  "SUBMITTED",
+  "VALIDATION_PAYMENT",
+]);
+
+/**
+ * Pró-forma ainda por confirmar: fica em Rascunhos e não entra na fila de pedidos
+ * nem na fila criativa. Ao aprovar ou avançar para produção, volta à fila.
+ */
+export function orderIsPendingProForma(order: {
+  status?: string | null;
+  lastDocumentModel?: string | null;
+  lastDocumentNumber?: string | null;
+}): boolean {
+  if (!orderHasProForma(order)) return false;
+  return PROFORMA_PENDING_STATUSES.has((order.status ?? "").toUpperCase());
+}
+
+/** Rascunhos da lista: rascunho real ou pró-forma ainda por confirmar. */
+export function orderBelongsInDraftBucket(order: {
+  status?: string | null;
+  lastDocumentModel?: string | null;
+  lastDocumentNumber?: string | null;
+}): boolean {
+  return (
+    (order.status ?? "").toUpperCase() === "DRAFT" ||
+    orderIsPendingProForma(order)
   );
 }

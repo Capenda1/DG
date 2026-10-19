@@ -86,6 +86,12 @@ export function BalcaoStickyFooter({
               {formatMoney(subtotals.total, currency)}
             </span>
           </p>
+          {cashTurnBlocking ? (
+            <p className="mt-1 text-[11px] leading-snug text-amber-800 dark:text-amber-300">
+              Turno de caixa fechado. Podes emitir pró-forma; factura e
+              factura-recibo só depois de abrir o turno.
+            </p>
+          ) : null}
         </div>
         <div className="flex shrink-0 flex-col gap-2 sm:flex-row sm:items-center">
           {editingExistingDraft && onReturnToPayment ? (
@@ -100,7 +106,7 @@ export function BalcaoStickyFooter({
           ) : null}
           <button
             type="button"
-            disabled={busy || !canAdvance || cashTurnBlocking}
+            disabled={busy || !canAdvance}
             onClick={onContinue}
             className="rounded-xl bg-gradient-to-r from-amber-400 to-orange-500 px-5 py-3 text-sm font-extrabold text-black shadow-md shadow-amber-600/25 transition hover:from-amber-300 hover:to-orange-400 disabled:pointer-events-none disabled:opacity-45"
           >
@@ -114,7 +120,7 @@ export function BalcaoStickyFooter({
           </button>
           <button
             type="button"
-            disabled={busy || !canAdvance || cashTurnBlocking}
+            disabled={busy || !canAdvance}
             onClick={onPause}
             className="rounded-xl border border-zinc-300 bg-white px-4 py-2.5 text-xs font-bold text-zinc-800 transition hover:border-amber-400/50 disabled:pointer-events-none disabled:opacity-45 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100"
           >

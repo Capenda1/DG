@@ -1,4 +1,8 @@
-import type { NotificationStatus, OrderStatus } from '@prisma/client';
+import type {
+  NotificationChannel,
+  NotificationStatus,
+  OrderStatus,
+} from '@prisma/client';
 
 export type SmsNotificationHistoryItem = {
   id: string;
@@ -30,4 +34,56 @@ export type SmsNotificationHistoryResponse = {
     pending: number;
     read: number;
   };
+};
+
+export type OrderCustomerNotifyChannel = 'SMS' | 'EMAIL' | 'WHATSAPP';
+
+export type OrderCustomerNotifyResult = {
+  channel: OrderCustomerNotifyChannel;
+  status: NotificationStatus;
+  notificationId: string;
+  body: string;
+  to: string | null;
+  whatsappUrl?: string;
+  twilioSid?: string | null;
+  error?: string | null;
+};
+
+export type OrderCustomerNotificationItem = {
+  id: string;
+  channel: NotificationChannel;
+  status: NotificationStatus;
+  title: string;
+  body: string;
+  createdAt: string;
+  sentAt: string | null;
+  sentByName: string | null;
+  to: string | null;
+  twilioSid: string | null;
+  error: string | null;
+  whatsappUrl: string | null;
+  manual: boolean;
+};
+
+export type OrderCustomerNotificationsResponse = {
+  items: OrderCustomerNotificationItem[];
+  lastByChannel: {
+    SMS: OrderCustomerNotificationItem | null;
+    EMAIL: OrderCustomerNotificationItem | null;
+    WHATSAPP: OrderCustomerNotificationItem | null;
+  };
+  contacts: {
+    phone: string | null;
+    phoneE164: string | null;
+    email: string | null;
+    name: string;
+  };
+  channelsReady: {
+    SMS: boolean;
+    EMAIL: boolean;
+    WHATSAPP: boolean;
+  };
+  smsSendMode: 'manual' | 'automatic';
+  smsInactiveReason: string | null;
+  emailInactiveReason: string | null;
 };

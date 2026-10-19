@@ -22,10 +22,12 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { ChangeOrderStatusDto } from './dto/change-order-status.dto';
+import { SaveBalcaoQuoteDto } from './dto/save-balcao-quote.dto';
 import {
   CreateCounterOrderDto,
   QuickBalcaoClientDto,
 } from './dto/create-counter-order.dto';
+import { NotifyOrderCustomerDto } from './dto/notify-order-customer.dto';
 import { ReplaceCounterOrderItemsDto } from './dto/replace-counter-order-items.dto';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { SaveCompositionDto } from './dto/save-composition.dto';
@@ -298,6 +300,37 @@ export class OrdersController {
     );
   }
 
+  /** Histórico e contactos para aviso manual ao cliente (SMS / email / WhatsApp). */
+  @Get(':id/customer-notifications')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.ATTENDANT, UserRole.DESIGNER)
+  getCustomerNotifications(
+    @Param('id') id: string,
+    @Req() req: Request & { user: { id: string; role: UserRole } },
+  ) {
+    return this.ordersService.getOrderCustomerNotifications(id, req.user);
+  }
+
+  /**
+   * Envia aviso manual ao cliente.
+   * WhatsApp devolve URL `wa.me` (envio pela equipa); SMS e email enviam pelo servidor.
+   */
+  @Post(':id/notify')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.ATTENDANT, UserRole.DESIGNER)
+  notifyCustomer(
+    @Param('id') id: string,
+    @Req() req: Request & { user: { id: string; role: UserRole } },
+    @Body() dto: NotifyOrderCustomerDto,
+  ) {
+    return this.ordersService.notifyOrderCustomer(
+      id,
+      dto.channel,
+      req.user,
+      dto.confirmResend,
+    );
+  }
+
   /** Reverte o cancelamento, incluindo stock e lançamento financeiro compensatório. */
   @Post(':id/reopen')
   @UseGuards(RolesGuard)
@@ -316,6 +349,21 @@ export class OrdersController {
     @Req() req: Request & { user: { id: string; role: UserRole } },
   ) {
     return this.ordersService.deleteOrder(id, req.user);
+  }
+
+  /**
+   * Grava desconto, notas e método previsto de uma pró-forma.
+   * O pedido permanece em rascunho — não há pagamento, stock nem fila.
+   */
+  @Patch(':id/quote')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.ATTENDANT)
+  saveBalcaoQuote(
+    @Param('id') id: string,
+    @Body() dto: SaveBalcaoQuoteDto,
+    @Req() req: Request & { user: { id: string; role: UserRole } },
+  ) {
+    return this.ordersService.saveBalcaoQuote(id, req.user, dto);
   }
 
   /**

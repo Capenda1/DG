@@ -85,11 +85,14 @@ export function BalcaoSubmitSuccessToast({
         className="relative overflow-hidden rounded-xl border border-zinc-200/95 bg-white/98 p-4 shadow-[0_22px_50px_-12px_rgba(0,0,0,0.28)] backdrop-blur-sm ring-1 ring-black/[0.04] before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-[3px] before:bg-gradient-to-r before:from-amber-500 before:via-violet-500 before:to-sky-500 before:opacity-95 before:content-[''] dark:border-zinc-700 dark:bg-zinc-900/98 dark:ring-white/[0.06]"
       >
         <p className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-white">
-          Pedido submetido com sucesso
+          {receiptPayload?.documentModel === "FACTURA_POR_FORMA"
+            ? "Pró-forma emitida"
+            : "Pedido submetido com sucesso"}
         </p>
         <p className="mt-1 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
-          A confirmar pedido · podes repetir a emissão ou abrir pedidos através
-          dos atalhos.
+          {receiptPayload?.documentModel === "FACTURA_POR_FORMA"
+            ? "O pedido continua em rascunho. Podes repetir a emissão ou convertê-lo quando o cliente aceitar."
+            : "A confirmar pedido · podes repetir a emissão ou abrir pedidos através dos atalhos."}
         </p>
         <div className="mt-3 overflow-hidden rounded-full bg-zinc-200/95 dark:bg-zinc-700/95">
           <div
@@ -119,10 +122,16 @@ export function BalcaoSubmitSuccessToast({
             </button>
           ) : null}
           <Link
-            href={ROUTES.admin.pedidos}
+            href={
+              receiptPayload?.documentModel === "FACTURA_POR_FORMA"
+                ? `${ROUTES.admin.pedidos}?status=DRAFT`
+                : ROUTES.admin.pedidos
+            }
             className="rounded-md text-zinc-700 underline underline-offset-2 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white"
           >
-            Ir para pedidos →
+            {receiptPayload?.documentModel === "FACTURA_POR_FORMA"
+              ? "Ir para rascunhos →"
+              : "Ir para pedidos →"}
           </Link>
         </div>
       </div>

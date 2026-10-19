@@ -15,10 +15,8 @@ import type { Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
-import {
-  SettingsService,
-  type TwilioSmsSettingsUpdate,
-} from '../settings/settings.service';
+import { SettingsService } from '../settings/settings.service';
+import { TwilioSmsSettingsUpdateDto } from './dto/twilio-sms-settings.dto';
 import { NotificationsService } from './notifications.service';
 import { TwilioSmsService } from './twilio-sms.service';
 
@@ -52,7 +50,7 @@ export class NotificationsController {
   @Patch('sms/settings')
   updateSmsSettings(
     @Req() req: Request & { user: { id: string; role: UserRole } },
-    @Body() body: TwilioSmsSettingsUpdate,
+    @Body() body: TwilioSmsSettingsUpdateDto,
   ) {
     if (req.user.role !== UserRole.ADMIN) {
       throw new ForbiddenException(

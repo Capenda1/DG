@@ -18,7 +18,12 @@ Guia para configurar SMS de **pedido finalizado** com remetente credível em Ang
 
 ## Canal único (sem resposta)
 
-Os SMS de **pedido finalizado** são **só de envio** (notificações):
+Os SMS de aviso ao cliente são **só de envio** (notificações). O modo escolhe-se em **Admin → Notificações → Configuração Twilio**:
+
+| Modo | Efeito |
+|------|--------|
+| **Manual** (predefinição) | Só envia quando a equipa clica em **Avisar cliente → Enviar SMS** no pedido |
+| **Automático** | Envia também quando o pedido passa a **Finalizado** |
 
 | Configuração | Efeito |
 |--------------|--------|
@@ -136,8 +141,8 @@ Exemplo de SMS após configuração correcta:
 
 1. Reinicia a API
 2. No arranque, confirma no log: `Twilio SMS activo (remetente: "GRAF DADIVA")`
-3. Marca um pedido como **Finalizado** (cliente com telefone +244 válido)
-4. Verifica em **Admin → SMS · pedido finalizado** (`/admin/notificacoes`)
+3. Em **Admin → Pedidos**, abre um pedido (cliente com telefone +244 válido) e usa **Avisar cliente → Enviar SMS**
+4. Verifica em **Admin → Notificações** (`/admin/notificacoes`)
 
 API de diagnóstico (com login admin):
 

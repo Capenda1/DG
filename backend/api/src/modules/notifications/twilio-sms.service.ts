@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import Twilio from 'twilio';
 import { SettingsService } from '../settings/settings.service';
-import { analyzeTwilioSmsFrom } from './twilio-sms.util';
+import { analyzeTwilioSmsFrom, mapTwilioSendError } from './twilio-sms.util';
 
 /** Valor recomendado para Angola (sender alfanumérico, máx. 11 caracteres). */
 export const TWILIO_RECOMMENDED_SENDER_AO = 'GRAF DADIVA';
@@ -19,6 +19,7 @@ export type TwilioSmsStatusView = {
   recommendedSender: string;
   setupGuidePath: string;
   configSource: 'database' | 'env' | null;
+  sendMode: 'manual' | 'automatic';
 };
 
 @Injectable()
@@ -64,9 +65,23 @@ export class TwilioSmsService implements OnModuleInit {
     const missing: string[] = [];
 
     if (!runtime) {
-      missing.push(
-        'Activa Twilio em Admin → SMS ou define TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN e TWILIO_SMS_FROM',
-      );
+      let sendMode: 'manual' | 'automatic' = 'manual';
+      try {
+        const diagnosed = await this.settings.diagnoseTwilioSms();
+        missing.push(
+          ...(diagnosed.length
+            ? diagnosed
+            : [
+                'Activa Twilio em Admin → SMS ou define TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN e TWILIO_SMS_FROM',
+              ]),
+        );
+        const pub = await this.settings.getTwilioSmsSettingsPublic();
+        sendMode = pub.sendMode;
+      } catch {
+        missing.push(
+          'Activa Twilio em Admin → SMS ou define TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN e TWILIO_SMS_FROM',
+        );
+      }
       return {
         enabled: false,
         configured: false,
@@ -80,6 +95,7 @@ export class TwilioSmsService implements OnModuleInit {
         recommendedSender: TWILIO_RECOMMENDED_SENDER_AO,
         setupGuidePath: 'docs/TWILIO-SMS-ANGOLA.md',
         configSource: null,
+        sendMode,
       };
     }
 
@@ -99,6 +115,7 @@ export class TwilioSmsService implements OnModuleInit {
       recommendedSender: TWILIO_RECOMMENDED_SENDER_AO,
       setupGuidePath: 'docs/TWILIO-SMS-ANGOLA.md',
       configSource: runtime.source,
+      sendMode: runtime.sendMode,
     };
   }
 
@@ -131,14 +148,20 @@ export class TwilioSmsService implements OnModuleInit {
       );
     }
 
-    const client = Twilio(runtime.accountSid, runtime.authToken);
-    const message = await client.messages.create({
-      to: toE164,
-      from,
-      body,
-    });
+    try {
+      const client = Twilio(runtime.accountSid, runtime.authToken);
+      const message = await client.messages.create({
+        to: toE164,
+        from,
+        body,
+      });
 
-    this.logger.log(`SMS Twilio enviado (${message.sid}) para ${toE164}`);
-    return { sid: message.sid };
+      this.logger.log(`SMS Twilio enviado (${message.sid}) para ${toE164}`);
+      return { sid: message.sid };
+    } catch (err) {
+      const mapped = mapTwilioSendError(err);
+      this.logger.error(`Twilio messages.create falhou: ${mapped}`);
+      throw new Error(mapped);
+    }
   }
 }

@@ -21,6 +21,7 @@ import {
   lifecycleStageById,
   orderHasClosedFactura,
   orderHasProForma,
+  orderIsPendingProForma,
   parseLifecycleStageId,
   type FacturaLifecycleStageId,
 } from "@/lib/facturas-lifecycle";
@@ -81,14 +82,20 @@ export function FacturasModule({ initialStage = "pro-forma" }: Props) {
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
+    const matchesQuery = (o: (typeof orders)[number]) => {
+      if (!q) return true;
+      return (
+        o.orderNumber.toLowerCase().includes(q) ||
+        o.client.name.toLowerCase().includes(q)
+      );
+    };
     return orders
       .filter((o) => o.status !== "CANCELLED")
       .filter((o) => {
-        if (!q) return true;
-        return (
-          o.orderNumber.toLowerCase().includes(q) ||
-          o.client.name.toLowerCase().includes(q)
-        );
+        if (activeStageId === "pro-forma" && !q) {
+          return orderIsPendingProForma(o);
+        }
+        return matchesQuery(o);
       });
   }, [orders, search, activeStageId]);
 
@@ -186,7 +193,9 @@ export function FacturasModule({ initialStage = "pro-forma" }: Props) {
         <div className="grid gap-5 lg:grid-cols-[1fr,minmax(280px,360px)]">
           <div>
             <label className="mb-2 block text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
-              Associar pedido
+              {activeStageId === "pro-forma" && !search.trim()
+                ? "Pró-formas em rascunho"
+                : "Associar pedido"}
             </label>
             <input
               type="search"
@@ -201,7 +210,9 @@ export function FacturasModule({ initialStage = "pro-forma" }: Props) {
               </p>
             ) : visible.length === 0 ? (
               <p className="py-6 text-center text-sm text-zinc-500">
-                Nenhum pedido elegível nesta etapa.
+                {activeStageId === "pro-forma" && !search.trim()
+                  ? "Nenhuma pró-forma em rascunho. Pesquisa um pedido para emitir a primeira."
+                  : "Nenhum pedido elegível nesta etapa."}
               </p>
             ) : (
               <ul className="max-h-[min(420px,50vh)] space-y-1 overflow-y-auto rounded-xl border border-white/[0.05] bg-zinc-900/30 p-1">
@@ -242,7 +253,9 @@ export function FacturasModule({ initialStage = "pro-forma" }: Props) {
                           ) : null}
                         </span>
                         <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
-                          {orderStatusLabel(o.status)}
+                          {orderIsPendingProForma(o)
+                            ? "Rascunho"
+                            : orderStatusLabel(o.status)}
                         </span>
                       </button>
                     </li>
@@ -292,8 +305,9 @@ export function FacturasModule({ initialStage = "pro-forma" }: Props) {
 
                 {stage.editable && activeStageId === "pro-forma" ? (
                   <p className="mt-4 rounded-lg border border-white/[0.08] bg-zinc-950/50 px-3 py-2 text-[11px] text-zinc-400">
-                    Pode reemitir o PDF enquanto o pedido não tiver factura
-                    fechada. Não movimenta stock.
+                    A pró-forma fica nos rascunhos e não entra na fila de
+                    pedidos. Pode reemitir o PDF enquanto o pedido não tiver
+                    factura fechada.
                   </p>
                 ) : null}
 

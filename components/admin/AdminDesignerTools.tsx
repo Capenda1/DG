@@ -18,6 +18,7 @@ import {
 } from "@/lib/api-client";
 import { openDesignerOrderChat } from "@/lib/designer-chat-events";
 import { loadSession } from "@/lib/auth-session";
+import { orderIsPendingProForma } from "@/lib/facturas-lifecycle";
 import { formatMoney } from "@/lib/format-money";
 import { ORDER_STATUS_LABEL, orderStatusLabel } from "@/lib/order-status";
 import {
@@ -185,6 +186,7 @@ function orderIsClaimable(
   role: string,
 ): boolean {
   if (role !== "DESIGNER" || !viewerId) return false;
+  if (orderIsPendingProForma(o)) return false;
   if (o.designer) return false;
   if (DESIGN_QUEUE.has(o.status)) return true;
   return (
@@ -404,7 +406,8 @@ export function AdminDesignerTools() {
     let assignedToMe = 0;
     let activePipeline = 0;
     for (const o of orders) {
-      if (DESIGN_QUEUE.has(o.status)) {
+      const pendingProForma = orderIsPendingProForma(o);
+      if (DESIGN_QUEUE.has(o.status) && !pendingProForma) {
         queue += 1;
         queueValue += orderAmount(o);
       }
@@ -422,14 +425,17 @@ export function AdminDesignerTools() {
       activePipeline,
       total: orders.length,
       noArtQueue: orders.filter(
-        (o) => DESIGN_QUEUE.has(o.status) && o._count.artVersions === 0,
+        (o) =>
+          DESIGN_QUEUE.has(o.status) &&
+          o._count.artVersions === 0 &&
+          !orderIsPendingProForma(o),
       ).length,
     };
   }, [orders, viewerId]);
 
   const presetCounts = useMemo(() => {
     const out: Record<ViewPreset, number> = {
-      priority: orders.length,
+      priority: orders.filter((o) => !orderIsPendingProForma(o)).length,
       design_queue: 0,
       design_queue_unassigned: 0,
       design_queue_no_art: 0,
@@ -438,14 +444,15 @@ export function AdminDesignerTools() {
       all_recent: orders.length,
     };
     for (const o of orders) {
-      if (DESIGN_QUEUE.has(o.status)) {
+      const pendingProForma = orderIsPendingProForma(o);
+      if (DESIGN_QUEUE.has(o.status) && !pendingProForma) {
         out.design_queue += 1;
         if (!o.designer) out.design_queue_unassigned += 1;
         if ((o._count?.artVersions ?? 0) === 0)
           out.design_queue_no_art += 1;
       }
       if (viewerId && o.designer?.id === viewerId) out.mine += 1;
-      if (o.status === "DRAFT") out.drafts += 1;
+      if (o.status === "DRAFT" || orderIsPendingProForma(o)) out.drafts += 1;
     }
     return out;
   }, [orders, viewerId]);
@@ -462,23 +469,32 @@ export function AdminDesignerTools() {
     (list: OrderListItem[], p: ViewPreset): OrderListItem[] => {
       switch (p) {
         case "design_queue":
-          return list.filter((o) => DESIGN_QUEUE.has(o.status));
+          return list.filter(
+            (o) => DESIGN_QUEUE.has(o.status) && !orderIsPendingProForma(o),
+          );
         case "design_queue_unassigned":
           return list.filter(
-            (o) => DESIGN_QUEUE.has(o.status) && !o.designer,
+            (o) =>
+              DESIGN_QUEUE.has(o.status) &&
+              !o.designer &&
+              !orderIsPendingProForma(o),
           );
         case "design_queue_no_art":
           return list.filter(
             (o) =>
               DESIGN_QUEUE.has(o.status) &&
-              (o._count.artVersions ?? 0) === 0,
+              (o._count.artVersions ?? 0) === 0 &&
+              !orderIsPendingProForma(o),
           );
         case "mine":
           return list.filter((o) => viewerId && o.designer?.id === viewerId);
         case "drafts":
-          return list.filter((o) => o.status === "DRAFT");
-        case "all_recent":
+          return list.filter(
+            (o) => o.status === "DRAFT" || orderIsPendingProForma(o),
+          );
         case "priority":
+          return list.filter((o) => !orderIsPendingProForma(o));
+        case "all_recent":
         default:
           return list;
       }

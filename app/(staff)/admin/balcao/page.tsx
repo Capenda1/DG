@@ -38,6 +38,7 @@ import {
   replaceCounterOrderItems,
   searchCounterClients,
   shareBalcaoDraftWithDesignTeam,
+  saveBalcaoQuote,
   submitOrder,
   type CatalogProduct,
   type CounterClientHit,
@@ -1201,12 +1202,6 @@ export default function AdminPedidoBalcaoPage() {
     setErr(null);
     setDoneId(null);
     setLastReceiptPayload(null);
-    if (cashTurnBlocking) {
-      setErr(
-        "Abra o turno de caixa (página Caixa) antes de registar vendas ou pedidos no balcão.",
-      );
-      return;
-    }
     if (!validateCounterStep1()) return;
     setStep1BusyAction("continue");
     setBusy(true);
@@ -1318,12 +1313,6 @@ export default function AdminPedidoBalcaoPage() {
     setErr(null);
     setDoneId(null);
     setLastReceiptPayload(null);
-    if (cashTurnBlocking) {
-      setErr(
-        "Abra o turno de caixa (página Caixa) antes de registar vendas ou pedidos no balcão.",
-      );
-      return;
-    }
     if (!validateCounterStep1()) return;
     setStep1BusyAction("pause");
     setBusy(true);
@@ -1548,13 +1537,23 @@ export default function AdminPedidoBalcaoPage() {
   async function submitDraftOrder() {
     if (!draftOrder) return;
     setErr(null);
-    if (cashTurnBlocking) {
+    const gross = balcaoGrossFromOrder(draftOrder);
+    if (discountExceedsGross(gross, discountInput)) {
+      setErr("O desconto não pode ser superior ao subtotal das linhas.");
+      return;
+    }
+    const issuingProforma = receiptDocumentModel === "FACTURA_POR_FORMA";
+    if (!issuingProforma && cashTurnBlocking) {
       setErr(
         "Abra o turno de caixa (página Caixa) antes de submeter o pedido.",
       );
       return;
     }
-    if (paymentMethodRequiresProof(paymentMethod) && !proofFile) {
+    if (
+      !issuingProforma &&
+      paymentMethodRequiresProof(paymentMethod) &&
+      !proofFile
+    ) {
       setErr("Anexa o comprovativo de pagamento (PNG, JPG ou PDF).");
       return;
     }
@@ -1565,14 +1564,9 @@ export default function AdminPedidoBalcaoPage() {
       );
       return;
     }
-    const gross = balcaoGrossFromOrder(draftOrder);
-    if (discountExceedsGross(gross, discountInput)) {
-      setErr("O desconto não pode ser superior ao subtotal das linhas.");
-      return;
-    }
     const disc = discountCappedToGross(gross, discountInput);
     const net = Math.round((gross - disc) * 100) / 100;
-    if (paymentMethod === "PDV_CASH") {
+    if (!issuingProforma && paymentMethod === "PDV_CASH") {
       const received = parseMoneyInput(receivedInput);
       if (!Number.isFinite(received)) {
         setErr("Indica o valor recebido em numerário.");
@@ -1597,36 +1591,48 @@ export default function AdminPedidoBalcaoPage() {
 
     setBusy(true);
     try {
-      const submitted = await submitOrder(
-        draftOrder.id,
-        paymentMethod,
-        proofFile ?? undefined,
+      const sess = loadSession();
+      const attendantLabel =
+        sess?.user?.name?.trim() || sess?.user?.email?.trim() || undefined;
+      const quoteFields = {
+        discountAmount: disc > 0 ? disc : undefined,
+        notes: orderDescriptionInput.trim() || undefined,
+        receptionDate: receptionDateInput.trim()
+          ? new Date(receptionDateInput).toISOString()
+          : undefined,
+      };
+      const orderForDocument = issuingProforma
+        ? await saveBalcaoQuote(draftOrder.id, {
+            ...quoteFields,
+            paymentMethod,
+          })
+        : await submitOrder(
+            draftOrder.id,
+            paymentMethod,
+            proofFile ?? undefined,
+            quoteFields,
+          );
+      const receiptPayload = await issueAndDeliverOrderDocument(
+        orderForDocument,
         {
-          discountAmount: disc > 0 ? disc : undefined,
-          notes: orderDescriptionInput.trim() || undefined,
-          receptionDate: receptionDateInput.trim()
-            ? new Date(receptionDateInput).toISOString()
-            : undefined,
+          receivedCash:
+            !issuingProforma &&
+            paymentMethod === "PDV_CASH" &&
+            Number.isFinite(receivedCash)
+              ? receivedCash
+              : undefined,
+          change:
+            !issuingProforma &&
+            changeAmount !== undefined &&
+            changeAmount > 0
+              ? changeAmount
+              : undefined,
+          attendantLabel,
+          documentModel: receiptDocumentModel,
         },
       );
-      const sess = loadSession();
-      const receiptPayload = await issueAndDeliverOrderDocument(submitted, {
-        receivedCash:
-          paymentMethod === "PDV_CASH" && Number.isFinite(receivedCash)
-            ? receivedCash
-            : undefined,
-        change:
-          changeAmount !== undefined && changeAmount > 0
-            ? changeAmount
-            : undefined,
-        attendantLabel:
-          sess?.user?.name?.trim() ||
-          sess?.user?.email?.trim() ||
-          undefined,
-        documentModel: receiptDocumentModel,
-      });
       setLastReceiptPayload(receiptPayload);
-      setDoneId(submitted.id);
+      setDoneId(orderForDocument.id);
       setDraftOrder(null);
       setPdvStep(1);
       setProofFile(null);
@@ -1639,7 +1645,13 @@ export default function AdminPedidoBalcaoPage() {
       setReceivedTouched(false);
       setReceivedInput("");
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Erro ao submeter pedido.");
+      setErr(
+        e instanceof Error
+          ? e.message
+          : issuingProforma
+            ? "Erro ao emitir a pró-forma."
+            : "Erro ao submeter pedido.",
+      );
     } finally {
       setBusy(false);
       void refreshCounterDrafts();
@@ -2177,14 +2189,16 @@ export default function AdminPedidoBalcaoPage() {
               </div>
               <div className="min-w-0">
                 <label
-                  className={`${dadivaLabel} ${paymentMethod !== "PDV_CASH" ? "text-zinc-400 dark:text-zinc-600" : ""}`}
+                  className={`${dadivaLabel} ${paymentMethod !== "PDV_CASH" || receiptDocumentModel === "FACTURA_POR_FORMA" ? "text-zinc-400 dark:text-zinc-600" : ""}`}
                 >
                   Valor recebido (Kz)
                 </label>
                 <p className="mt-0.5 text-[11px] leading-snug text-zinc-500 dark:text-zinc-400">
-                  {paymentMethod === "PDV_CASH"
-                    ? "Pré-preenchido com o total a pagar; altera só se houver troco ou usa o botão para confirmar o valor exacto."
-                    : "Activa com «Dinheiro (balcão)»."}
+                  {receiptDocumentModel === "FACTURA_POR_FORMA"
+                    ? "A pró-forma não regista pagamento."
+                    : paymentMethod === "PDV_CASH"
+                      ? "Pré-preenchido com o total a pagar; altera só se houver troco ou usa o botão para confirmar o valor exacto."
+                      : "Activa com «Dinheiro (balcão)»."}
                 </p>
                 <input
                   type="text"
@@ -2203,10 +2217,14 @@ export default function AdminPedidoBalcaoPage() {
                       ),
                     );
                   }}
-                  disabled={paymentMethod !== "PDV_CASH"}
+                  disabled={
+                    paymentMethod !== "PDV_CASH" ||
+                    receiptDocumentModel === "FACTURA_POR_FORMA"
+                  }
                   className={`${dadivaInput} mt-2 disabled:cursor-not-allowed disabled:bg-zinc-100 disabled:opacity-50 dark:disabled:bg-zinc-800`}
                 />
-                {paymentMethod === "PDV_CASH" ? (
+                {paymentMethod === "PDV_CASH" &&
+                receiptDocumentModel !== "FACTURA_POR_FORMA" ? (
                   <button
                     type="button"
                     disabled={busy || netToPayNum <= 0}
@@ -2275,7 +2293,8 @@ export default function AdminPedidoBalcaoPage() {
                     </div>
                   </button>
                 ) : null}
-                {paymentMethod === "PDV_CASH" ? (
+                {paymentMethod === "PDV_CASH" &&
+                receiptDocumentModel !== "FACTURA_POR_FORMA" ? (
                   trocoPreview != null ? (
                     <p className="mt-1.5 text-sm text-zinc-700 dark:text-zinc-300">
                       Troco:{" "}
@@ -2317,7 +2336,8 @@ export default function AdminPedidoBalcaoPage() {
                 </div>
               </div>
             </div>
-            {paymentMethodRequiresProof(paymentMethod) ? (
+            {receiptDocumentModel !== "FACTURA_POR_FORMA" &&
+            paymentMethodRequiresProof(paymentMethod) ? (
               <div className="mt-4">
                 <label className={dadivaLabel}>
                   Comprovativo de pagamento *
@@ -2347,6 +2367,13 @@ export default function AdminPedidoBalcaoPage() {
               .
             </p>
             <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-stretch sm:justify-end">
+              {cashTurnBlocking &&
+              receiptDocumentModel !== "FACTURA_POR_FORMA" ? (
+                <p className="w-full text-[11px] leading-snug text-amber-800 dark:text-amber-300 sm:mr-auto sm:max-w-xs">
+                  Abre o turno de caixa para submeter factura ou factura-recibo.
+                  A pró-forma pode ser emitida com o turno fechado.
+                </p>
+              ) : null}
               <button
                 type="button"
                 disabled={busy}
@@ -2365,11 +2392,22 @@ export default function AdminPedidoBalcaoPage() {
               </button>
               <button
                 type="button"
-                disabled={busy || cashTurnBlocking || discountOverGross}
+                disabled={
+                  busy ||
+                  discountOverGross ||
+                  (receiptDocumentModel !== "FACTURA_POR_FORMA" &&
+                    cashTurnBlocking)
+                }
                 onClick={() => void submitDraftOrder()}
                 className="rounded-xl bg-gradient-to-r from-amber-400 via-amber-500 to-orange-500 px-8 py-3.5 text-sm font-extrabold text-black shadow-[0_12px_34px_-10px_rgba(245,158,11,0.75)] ring-2 ring-black/20 transition hover:-translate-y-px hover:from-amber-300 hover:to-amber-400 hover:shadow-[0_14px_40px_-10px_rgba(245,158,11,0.85)] disabled:opacity-45 dark:ring-white/35 sm:min-w-[12rem]"
               >
-                {busy ? "A submeter…" : "Submeter pedido"}
+                {busy
+                  ? receiptDocumentModel === "FACTURA_POR_FORMA"
+                    ? "A emitir…"
+                    : "A submeter…"
+                  : receiptDocumentModel === "FACTURA_POR_FORMA"
+                    ? "Emitir pró-forma"
+                    : "Submeter pedido"}
               </button>
             </div>
           </section>

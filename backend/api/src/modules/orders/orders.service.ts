@@ -180,7 +180,7 @@ export class OrdersService {
   /**
    * Quem pode aplicar cada transição (além de ADMIN, que vê sempre o grafo completo).
    * - Cliente: apenas cancelamento do próprio pedido (mantido na lógica de `CANCELLED`).
-   * - Atendente: colocar em «Validação e pagamento»; marcar como «Entregue».
+   * - Atendente: avançar o fluxo (validação, aprovado, produção, finalizado, entregue). Não cancela.
    * - Designer (pedido atribuído): «Aprovado» → «Em produção» → «Finalizado».
    * - Última fase «Entregue» (FINISHED → DELIVERED): qualquer perfil interno (ADMIN, ATENDANT, DESIGNER).
    */
@@ -224,6 +224,12 @@ export class OrdersService {
       return (
         (current === OrderStatus.SUBMITTED &&
           next === OrderStatus.VALIDATION_PAYMENT) ||
+        (current === OrderStatus.VALIDATION_PAYMENT &&
+          next === OrderStatus.APPROVED) ||
+        (current === OrderStatus.APPROVED &&
+          next === OrderStatus.IN_PRODUCTION) ||
+        (current === OrderStatus.IN_PRODUCTION &&
+          next === OrderStatus.FINISHED) ||
         (current === OrderStatus.FINISHED && next === OrderStatus.DELIVERED)
       );
     }
@@ -1548,6 +1554,43 @@ export class OrdersService {
     return updated;
   }
 
+  /**
+   * Aviso manual ao cliente (SMS / email / WhatsApp).
+   * SMS automático ao finalizar depende de Admin → Notificações → modo SMS.
+   */
+  async notifyOrderCustomer(
+    orderId: string,
+    channel: 'SMS' | 'EMAIL' | 'WHATSAPP',
+    actor: { id: string; role: UserRole },
+    confirmResend?: boolean,
+  ) {
+    if (actor.role === UserRole.CLIENT) {
+      throw new ForbiddenException(
+        'Apenas a equipa interna pode enviar avisos ao cliente.',
+      );
+    }
+    await this.findOneForUser(orderId, actor);
+    return this.notifications.notifyOrderCustomer({
+      orderId,
+      channel,
+      sentById: actor.id,
+      confirmResend,
+    });
+  }
+
+  async getOrderCustomerNotifications(
+    orderId: string,
+    actor: { id: string; role: UserRole },
+  ) {
+    if (actor.role === UserRole.CLIENT) {
+      throw new ForbiddenException(
+        'Apenas a equipa interna pode ver avisos ao cliente.',
+      );
+    }
+    await this.findOneForUser(orderId, actor);
+    return this.notifications.getOrderCustomerNotifyContext(orderId);
+  }
+
   async reopenCancelledOrder(
     orderId: string,
     actor: { id: string; role: UserRole },
@@ -1721,6 +1764,126 @@ export class OrdersService {
   private paymentProofDir(orderId: string): string {
     const base = this.config.get<string>('uploadDir') ?? 'uploads';
     return join(process.cwd(), base, 'orders', orderId, 'payment');
+  }
+
+  /**
+   * Proposta de balcão: actualiza totais e notas do rascunho sem o submeter.
+   */
+  async saveBalcaoQuote(
+    orderId: string,
+    actor: { id: string; role: UserRole },
+    input: {
+      discountAmount?: number;
+      notes?: string;
+      receptionDate?: string;
+      paymentMethod?: PaymentMethod;
+    },
+  ) {
+    if (actor.role !== UserRole.ADMIN && actor.role !== UserRole.ATTENDANT) {
+      throw new ForbiddenException(
+        'Apenas administrador ou atendente podem gravar uma pró-forma.',
+      );
+    }
+
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        id: true,
+        status: true,
+        orderOrigin: true,
+        attendantId: true,
+        orderNumber: true,
+        currency: true,
+        items: { select: { unitPrice: true, quantity: true } },
+      },
+    });
+    if (!order) {
+      throw new NotFoundException('Pedido não encontrado.');
+    }
+    if (order.status !== OrderStatus.DRAFT) {
+      throw new BadRequestException(
+        'A pró-forma só se emite enquanto o pedido está em rascunho.',
+      );
+    }
+    if (order.orderOrigin !== OrderOrigin.BALCAO) {
+      throw new BadRequestException(
+        'Esta gravação de proposta destina-se a pedidos de balcão.',
+      );
+    }
+    if (actor.role === UserRole.ATTENDANT && order.attendantId !== actor.id) {
+      throw new ForbiddenException(
+        'Só o atendente que abriu este rascunho pode emitir a pró-forma.',
+      );
+    }
+
+    let gross = 0;
+    for (const it of order.items) {
+      gross += Number(it.unitPrice) * (it.quantity ?? 0);
+    }
+    gross = Math.round(gross * 100) / 100;
+
+    let discountToApply = input.discountAmount ?? 0;
+    if (!Number.isFinite(discountToApply) || discountToApply < 0) {
+      throw new BadRequestException('Desconto inválido.');
+    }
+    discountToApply = Math.round(discountToApply * 100) / 100;
+    if (discountToApply > gross) discountToApply = gross;
+    const netTotal = Math.round((gross - discountToApply) * 100) / 100;
+
+    let notesToApply: string | null | undefined;
+    if (input.notes !== undefined) {
+      notesToApply = input.notes.trim() ? input.notes.trim() : null;
+    }
+
+    let receptionDateToApply: Date | null | undefined;
+    if (input.receptionDate !== undefined) {
+      const trimmed = input.receptionDate.trim();
+      if (!trimmed) {
+        receptionDateToApply = null;
+      } else {
+        const parsed = new Date(trimmed);
+        if (!Number.isFinite(parsed.getTime())) {
+          throw new BadRequestException('Data de recepção inválida.');
+        }
+        receptionDateToApply = parsed;
+      }
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const u = await tx.order.update({
+        where: { id: orderId },
+        data: {
+          totalAmount: new Prisma.Decimal(netTotal),
+          discountAmount: new Prisma.Decimal(discountToApply),
+          ...(notesToApply !== undefined ? { notes: notesToApply } : {}),
+          ...(receptionDateToApply !== undefined
+            ? { receptionDate: receptionDateToApply }
+            : {}),
+          ...(input.paymentMethod !== undefined
+            ? { paymentMethod: input.paymentMethod }
+            : {}),
+        },
+        include: this.orderDetailInclude(),
+      });
+      await tx.auditLog.create({
+        data: {
+          entityType: 'Order',
+          entityId: orderId,
+          orderId,
+          action: AuditAction.UPDATE,
+          userId: actor.id,
+          payload: {
+            kind: 'PROFORMA_QUOTE',
+            discountAmount: discountToApply,
+            netTotal,
+            paymentMethod: input.paymentMethod ?? null,
+          },
+        },
+      });
+      return u;
+    });
+
+    return updated;
   }
 
   async submitOrderWithProof(

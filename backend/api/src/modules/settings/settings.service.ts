@@ -124,6 +124,12 @@ const DEFAULT_LOGIN_APPEARANCE: LoginAppearanceSettings = {
   updatedAt: '',
 };
 
+export type TwilioSmsSendMode = 'manual' | 'automatic';
+
+export function parseTwilioSmsSendMode(raw: unknown): TwilioSmsSendMode {
+  return raw === 'automatic' ? 'automatic' : 'manual';
+}
+
 /** SMS Twilio configurável pelo admin (substitui .env quando `enabled`). */
 export interface TwilioSmsSettings {
   enabled: boolean;
@@ -133,6 +139,8 @@ export interface TwilioSmsSettings {
   /** Placeholders: {cliente}, {empresa}, {pedido}, {contacto}, {rodape} */
   messageTemplate: string;
   oneWayFooter: string;
+  /** Manual = só no pedido; automático = SMS ao passar a Finalizado. */
+  sendMode: TwilioSmsSendMode;
 }
 
 export type TwilioSmsSettingsPublic = Omit<TwilioSmsSettings, 'authToken'> & {
@@ -154,6 +162,7 @@ export type TwilioSmsRuntimeConfig = {
   smsFrom: string;
   messageTemplate: string;
   oneWayFooter: string;
+  sendMode: TwilioSmsSendMode;
   source: 'database' | 'env';
 };
 
@@ -170,6 +179,7 @@ const DEFAULT_TWILIO_SMS: TwilioSmsSettings = {
   smsFrom: 'GRAF DADIVA',
   messageTemplate: DEFAULT_TWILIO_SMS_MESSAGE_TEMPLATE,
   oneWayFooter: DEFAULT_TWILIO_SMS_ONE_WAY_FOOTER,
+  sendMode: 'manual',
 };
 
 /** SMTP configurável pelo admin (substitui .env quando `enabled`). */
@@ -795,6 +805,7 @@ export class SettingsService {
         typeof raw.oneWayFooter === 'string'
           ? raw.oneWayFooter
           : DEFAULT_TWILIO_SMS.oneWayFooter,
+      sendMode: parseTwilioSmsSendMode(raw.sendMode),
     };
   }
 
@@ -816,9 +827,10 @@ export class SettingsService {
         envFlag !== '0' && envFlag !== 'false' && envFlag !== 'off';
 
       const hasDbCreds = Boolean(
-        raw.accountSid.trim() && raw.authToken.trim(),
+        raw.accountSid.trim() && raw.authToken.trim() && raw.smsFrom.trim(),
       );
-      const usingDb = raw.enabled && hasDbCreds;
+      /** Credenciais na BD chegam para enviar; `enabled` é só interruptor extra. */
+      const usingDb = hasDbCreds;
 
       return {
         enabled: usingDb ? true : envConfigured && envEnabled,
@@ -830,6 +842,7 @@ export class SettingsService {
           : raw.smsFrom.trim() || envFrom || DEFAULT_TWILIO_SMS.smsFrom,
         messageTemplate: raw.messageTemplate,
         oneWayFooter: raw.oneWayFooter,
+        sendMode: raw.sendMode,
         hasAuthToken: usingDb
           ? Boolean(raw.authToken.trim())
           : Boolean(envToken || raw.authToken.trim()),
@@ -849,6 +862,7 @@ export class SettingsService {
         smsFrom: DEFAULT_TWILIO_SMS.smsFrom,
         messageTemplate: DEFAULT_TWILIO_SMS.messageTemplate,
         oneWayFooter: DEFAULT_TWILIO_SMS.oneWayFooter,
+        sendMode: DEFAULT_TWILIO_SMS.sendMode,
         hasAuthToken: false,
         configSource: 'database',
       };
@@ -864,17 +878,27 @@ export class SettingsService {
       typeof patch.authToken === 'string' && patch.authToken.trim()
         ? patch.authToken.trim()
         : current.authToken;
+    const mergedSid =
+      patch.accountSid !== undefined
+        ? patch.accountSid.trim()
+        : current.accountSid;
+    const mergedFrom =
+      patch.smsFrom !== undefined
+        ? patch.smsFrom.trim() || DEFAULT_TWILIO_SMS.smsFrom
+        : current.smsFrom;
+    const hasCreds = Boolean(
+      mergedSid.trim() && authToken.trim() && mergedFrom.trim(),
+    );
     const merged: TwilioSmsSettings = {
-      enabled: patch.enabled ?? current.enabled,
-      accountSid:
-        patch.accountSid !== undefined
-          ? patch.accountSid.trim()
-          : current.accountSid,
+      enabled:
+        patch.enabled !== undefined
+          ? patch.enabled
+          : hasCreds
+            ? true
+            : current.enabled,
+      accountSid: mergedSid,
       authToken,
-      smsFrom:
-        patch.smsFrom !== undefined
-          ? patch.smsFrom.trim() || DEFAULT_TWILIO_SMS.smsFrom
-          : current.smsFrom,
+      smsFrom: mergedFrom,
       messageTemplate:
         patch.messageTemplate !== undefined
           ? patch.messageTemplate.trim() ||
@@ -884,6 +908,10 @@ export class SettingsService {
         patch.oneWayFooter !== undefined
           ? patch.oneWayFooter
           : current.oneWayFooter,
+      sendMode:
+        patch.sendMode !== undefined
+          ? parseTwilioSmsSendMode(patch.sendMode)
+          : current.sendMode,
     };
     await this.prisma.setting.upsert({
       where: { key: TWILIO_SMS_KEY },
@@ -895,9 +923,7 @@ export class SettingsService {
       ...rest,
       hasAuthToken: Boolean(merged.authToken.trim()),
       configSource:
-        merged.enabled &&
-        merged.accountSid.trim() &&
-        merged.authToken.trim()
+        merged.accountSid.trim() && merged.authToken.trim()
           ? 'database'
           : this.envTwilioConfigured()
             ? 'env'
@@ -905,11 +931,41 @@ export class SettingsService {
     };
   }
 
+  /** Lista o que falta para o Twilio ficar activo — sem expor o token. */
+  async diagnoseTwilioSms(): Promise<string[]> {
+    const db = await this.getTwilioSmsSettingsRaw();
+    const envSid = process.env.TWILIO_ACCOUNT_SID?.trim() ?? '';
+    const envToken = process.env.TWILIO_AUTH_TOKEN?.trim() ?? '';
+    const envFrom = process.env.TWILIO_SMS_FROM?.trim() ?? '';
+    const envReady = Boolean(envSid && envToken && envFrom);
+
+    const missing: string[] = [];
+    const hasSid = Boolean(db.accountSid.trim() || envSid);
+    const hasToken = Boolean(db.authToken.trim() || envToken);
+    const hasFrom = Boolean(db.smsFrom.trim() || envFrom);
+
+    if (!hasSid) missing.push('Account SID');
+    if (!hasToken) {
+      missing.push(
+        'Auth Token ainda não gravado — cola o token da consola Twilio e guarda',
+      );
+    }
+    if (!hasFrom) missing.push('Remetente (Sender ID)');
+    const hasDbCreds = Boolean(
+      db.accountSid.trim() && db.authToken.trim() && db.smsFrom.trim(),
+    );
+    if (!hasDbCreds && !envReady && !db.enabled) {
+      missing.push(
+        'Guarda Account SID, Auth Token e remetente nesta página',
+      );
+    }
+    return missing;
+  }
+
   /** Credenciais efectivas: base de dados (se activa) ou variáveis de ambiente. */
   async resolveTwilioSmsRuntimeConfig(): Promise<TwilioSmsRuntimeConfig | null> {
     const db = await this.getTwilioSmsSettingsRaw();
     if (
-      db.enabled &&
       db.accountSid.trim() &&
       db.authToken.trim() &&
       db.smsFrom.trim()
@@ -921,6 +977,7 @@ export class SettingsService {
         smsFrom: db.smsFrom.trim(),
         messageTemplate: db.messageTemplate,
         oneWayFooter: db.oneWayFooter,
+        sendMode: db.sendMode,
         source: 'database',
       };
     }
@@ -954,6 +1011,7 @@ export class SettingsService {
       smsFrom,
       messageTemplate: db.messageTemplate || DEFAULT_TWILIO_SMS.messageTemplate,
       oneWayFooter: db.oneWayFooter ?? DEFAULT_TWILIO_SMS.oneWayFooter,
+      sendMode: db.sendMode,
       source: 'env',
     };
   }

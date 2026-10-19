@@ -12,3 +12,11 @@ export type PasswordResetCodeMailPayload = {
   recipientName: string;
   code: string;
 };
+
+export type OrderCustomerNotifyMailPayload = {
+  to: string;
+  recipientName: string;
+  orderNumber: string;
+  businessPhone?: string;
+  appName?: string;
+};

@@ -799,6 +799,7 @@ export type SmsTwilioStatus = {
   recommendedSender: string;
   setupGuidePath: string;
   configSource: "database" | "env" | null;
+  sendMode: "manual" | "automatic";
 };
 
 export type TwilioSmsSettings = {
@@ -807,6 +808,7 @@ export type TwilioSmsSettings = {
   smsFrom: string;
   messageTemplate: string;
   oneWayFooter: string;
+  sendMode: "manual" | "automatic";
   hasAuthToken: boolean;
   configSource: "database" | "env";
 };
@@ -872,6 +874,82 @@ export async function fetchSmsNotificationHistory(params?: {
     `/api/notifications/sms/history${qs ? `?${qs}` : ""}`,
     { auth: true },
   );
+}
+
+export type OrderNotifyChannel = "SMS" | "EMAIL" | "WHATSAPP";
+
+export type OrderCustomerNotifyResult = {
+  channel: OrderNotifyChannel;
+  status: "PENDING" | "SENT" | "FAILED" | "READ";
+  notificationId: string;
+  body: string;
+  to: string | null;
+  whatsappUrl?: string;
+  twilioSid?: string | null;
+  error?: string | null;
+};
+
+export type OrderCustomerNotificationItem = {
+  id: string;
+  channel: "SMS" | "EMAIL" | "WHATSAPP" | "IN_APP";
+  status: "PENDING" | "SENT" | "FAILED" | "READ";
+  title: string;
+  body: string;
+  createdAt: string;
+  sentAt: string | null;
+  sentByName: string | null;
+  to: string | null;
+  twilioSid: string | null;
+  error: string | null;
+  whatsappUrl: string | null;
+  manual: boolean;
+};
+
+export type OrderCustomerNotificationsResponse = {
+  items: OrderCustomerNotificationItem[];
+  lastByChannel: {
+    SMS: OrderCustomerNotificationItem | null;
+    EMAIL: OrderCustomerNotificationItem | null;
+    WHATSAPP: OrderCustomerNotificationItem | null;
+  };
+  contacts: {
+    phone: string | null;
+    phoneE164: string | null;
+    email: string | null;
+    name: string;
+  };
+  channelsReady: {
+    SMS: boolean;
+    EMAIL: boolean;
+    WHATSAPP: boolean;
+  };
+  smsSendMode: "manual" | "automatic";
+  smsInactiveReason: string | null;
+  emailInactiveReason: string | null;
+};
+
+export async function fetchOrderCustomerNotifications(
+  orderId: string,
+): Promise<OrderCustomerNotificationsResponse> {
+  return apiJson<OrderCustomerNotificationsResponse>(
+    `/api/orders/${orderId}/customer-notifications`,
+    { auth: true },
+  );
+}
+
+export async function notifyOrderCustomer(
+  orderId: string,
+  channel: OrderNotifyChannel,
+  opts?: { confirmResend?: boolean },
+): Promise<OrderCustomerNotifyResult> {
+  return apiJson<OrderCustomerNotifyResult>(`/api/orders/${orderId}/notify`, {
+    method: "POST",
+    auth: true,
+    body: JSON.stringify({
+      channel,
+      ...(opts?.confirmResend === true ? { confirmResend: true } : {}),
+    }),
+  });
 }
 
 export type InvoiceDocumentModelValue =
@@ -1166,6 +1244,24 @@ export async function submitOrder(
     throw err;
   }
   return res.json() as Promise<OrderDetail>;
+}
+
+/** Grava a proposta de balcão (desconto, notas, pagamento previsto) sem submeter. */
+export async function saveBalcaoQuote(
+  orderId: string,
+  body: {
+    discountAmount?: number;
+    notes?: string;
+    receptionDate?: string;
+    paymentMethod?: PaymentMethodValue;
+  },
+): Promise<OrderDetail> {
+  return apiJson<OrderDetail>(`/api/orders/${orderId}/quote`, {
+    method: "PATCH",
+    auth: true,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }
 
 /* ─── Catálogo & produtos (admin) ───────────────────────────── */

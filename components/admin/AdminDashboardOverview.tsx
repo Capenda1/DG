@@ -34,6 +34,7 @@ import {
   type OrderListItem,
 } from "@/lib/api-client";
 import { formatMoney } from "@/lib/format-money";
+import { orderIsPendingProForma } from "@/lib/facturas-lifecycle";
 import { orderStatusLabel } from "@/lib/order-status";
 import { ROUTES } from "@/lib/routes";
 import { IconBox } from "@/components/admin/admin-nav-icons";
@@ -374,11 +375,13 @@ export function AdminDashboardOverview() {
       byStatus.set(o.status, (byStatus.get(o.status) ?? 0) + 1);
       clientIds.add(o.client.id);
       const amt = parseAmount(o.totalAmount);
-      if (!PIPELINE_EXCLUDE.has(o.status)) {
+      if (!PIPELINE_EXCLUDE.has(o.status) && !orderIsPendingProForma(o)) {
         pipelineValue += amt;
       }
       if (PRODUCTION_STATUSES.has(o.status)) productionCount += 1;
-      if (DESIGN_QUEUE.has(o.status)) designQueueCount += 1;
+      if (DESIGN_QUEUE.has(o.status) && !orderIsPendingProForma(o)) {
+        designQueueCount += 1;
+      }
     }
 
     const statusChart = [...byStatus.entries()]
@@ -413,6 +416,7 @@ export function AdminDashboardOverview() {
     }));
 
     const recent = [...orders]
+      .filter((o) => !orderIsPendingProForma(o))
       .sort(
         (a, b) =>
           new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),

@@ -1,4 +1,4 @@
-import { analyzeTwilioSmsFrom } from './twilio-sms.util';
+import { analyzeTwilioSmsFrom, mapTwilioSendError } from './twilio-sms.util';
 
 describe('twilio-sms.util', () => {
   it('detecta sender alfanumérico recomendado (canal único)', () => {
@@ -26,5 +26,31 @@ describe('twilio-sms.util', () => {
     const r = analyzeTwilioSmsFrom('+244923865632');
     expect(r.isRecommendedForAngola).toBe(true);
     expect(r.isUsNumber).toBe(false);
+  });
+});
+
+describe('mapTwilioSendError', () => {
+  it('traduz falha de autenticação', () => {
+    expect(mapTwilioSendError({ code: 20003, message: 'Authenticate' })).toMatch(
+      /credenciais/i,
+    );
+  });
+
+  it('traduz sender alfanumérico inactivo', () => {
+    expect(
+      mapTwilioSendError({ code: 21612, message: 'Alphanumeric Sender ID' }),
+    ).toMatch(/Alphanumeric Sender ID/i);
+  });
+
+  it('traduz conta suspensa', () => {
+    expect(
+      mapTwilioSendError({ code: 20005, message: 'Account is not active' }),
+    ).toMatch(/suspensa/i);
+  });
+
+  it('traduz saldo insuficiente', () => {
+    expect(
+      mapTwilioSendError({ code: 10001, message: 'Insufficient funds' }),
+    ).toMatch(/Saldo/i);
   });
 });

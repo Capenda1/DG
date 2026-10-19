@@ -44,8 +44,12 @@ export type PoloChildBrandId =
   | "POLO_LACOST_PESADA_CHILD"
   | "POLO_LACOST_LEVE_CHILD";
 
-/** Colete: Normal, Pesado. */
-export type ColeteBrandId = "COLETE_NORMAL" | "COLETE_PESADA";
+/** Colete: multibolso (pesado/leve) e reflector (pesado/leve). */
+export type ColeteBrandId =
+  | "COLETE_PESADA"
+  | "COLETE_NORMAL"
+  | "COLETE_REFLECTOR_PESADO"
+  | "COLETE_REFLECTOR_LEVE";
 
 /** Boné: com rede, sem rede. */
 export type BoneBrandId = "BONE_COM_REDE" | "BONE_SEM_REDE";
@@ -80,8 +84,10 @@ export const POLO_CHILD_BRANDS: { id: PoloChildBrandId; label: string }[] = [
 ];
 
 export const COLETE_BRANDS: { id: ColeteBrandId; label: string }[] = [
-  { id: "COLETE_PESADA", label: "Colete pesado" },
-  { id: "COLETE_NORMAL", label: "Colete normal" },
+  { id: "COLETE_PESADA", label: "Multibolso pesado" },
+  { id: "COLETE_NORMAL", label: "Multibolso leve" },
+  { id: "COLETE_REFLECTOR_PESADO", label: "Reflector pesado" },
+  { id: "COLETE_REFLECTOR_LEVE", label: "Reflector leve" },
 ];
 
 export const BONE_BRANDS: { id: BoneBrandId; label: string }[] = [
@@ -473,6 +479,8 @@ const BRAND_SKU_CODES: Record<ApparelBrandId, string> = {
   POLO_LACOST_LEVE_CHILD: "PLLC",
   COLETE_NORMAL: "CLN",
   COLETE_PESADA: "CLP",
+  COLETE_REFLECTOR_PESADO: "CRP",
+  COLETE_REFLECTOR_LEVE: "CRL",
   BONE_COM_REDE: "BCR",
   BONE_SEM_REDE: "BSR",
 };

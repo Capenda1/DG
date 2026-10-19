@@ -25,6 +25,10 @@ import {
   OrderArtPreviewModal,
   type OrderArtPreviewTarget,
 } from "@/components/admin/OrderArtPreviewModal";
+import {
+  orderBelongsInDraftBucket,
+  orderIsPendingProForma,
+} from "@/lib/facturas-lifecycle";
 import { orderStatusLabel } from "@/lib/order-status";
 import { formatMoney } from "@/lib/format-money";
 import { issueAndDeliverOrderDocument } from "@/lib/order-document-flow";
@@ -43,6 +47,7 @@ import {
   getLatestArtVersion,
 } from "@/lib/modelagem-authorship";
 import { ChatBox } from "@/components/chat/ChatBox";
+import { OrderNotifyClientPanel } from "@/components/admin/OrderNotifyClientPanel";
 import { loadSession } from "@/lib/auth-session";
 
 /* ─── helpers ──────────────────────────────────────────────── */
@@ -145,7 +150,7 @@ function orderMatchesDatePeriod(
 function estadoAvancoHintForRole(role: string | undefined): string | null {
   switch (role) {
     case "ATTENDANT":
-      return "Como atendente podes colocar em validação de pagamento e, em «Finalizado», marcar entregue (toda a equipa pode registar a entrega).";
+      return "Como atendente podes avançar o pedido: validação de pagamento, aprovado, em produção, finalizado e entregue.";
     case "DESIGNER":
       return "Como designer geres aprovação, produção e finalizado; a entrega ao cliente pode ser registada por qualquer perfil da equipa quando o pedido estiver finalizado.";
     case "ADMIN":
@@ -1092,6 +1097,11 @@ function OrderDetailPanel({
             <p className="text-zinc-300">{order.client.name}</p>
           </div>
 
+          <OrderNotifyClientPanel
+            orderId={order.id}
+            orderStatus={order.status}
+          />
+
           {/* Método de pagamento, comprovantes e anexos — apenas equipa com permissão financeira */}
           {!hidePaymentAndMoney && order.paymentMethod ? (
             <div className="rounded-xl border border-white/[0.07] bg-black/30 px-4 py-3 text-xs">
@@ -1456,18 +1466,23 @@ export default function AdminPedidosPage() {
     }
   }, [periodFromUrl]);
 
+  const queueOrders = useMemo(
+    () => orders.filter((o) => !orderIsPendingProForma(o)),
+    [orders],
+  );
+
   useEffect(() => {
-    if (!orderIdFromUrl || orders.length === 0) return;
-    const found = orders.find((o) => o.id === orderIdFromUrl);
+    if (!orderIdFromUrl || queueOrders.length === 0) return;
+    const found = queueOrders.find((o) => o.id === orderIdFromUrl);
     if (found) setSelected(found);
-  }, [orderIdFromUrl, orders]);
+  }, [orderIdFromUrl, queueOrders]);
 
   /* Polling de mensagens não lidas (a cada 10s) */
   useEffect(() => {
     async function fetchUnread() {
-      if (orders.length === 0) return;
+      if (queueOrders.length === 0) return;
       try {
-        const map = await getUnreadCounts(orders.map((o) => o.id));
+        const map = await getUnreadCounts(queueOrders.map((o) => o.id));
         setUnreadMap(map);
       } catch {
         /* silencioso */
@@ -1476,13 +1491,17 @@ export default function AdminPedidosPage() {
     void fetchUnread();
     const id = setInterval(() => void fetchUnread(), 10_000);
     return () => clearInterval(id);
-  }, [orders]);
+  }, [queueOrders]);
 
   const refreshOrderInList = useCallback(async (orderId: string) => {
     const data = await adminListOrders(200, 0, true);
     setOrders(data);
     const refreshed = data.find((o) => o.id === orderId);
-    if (refreshed) setSelected(refreshed);
+    if (refreshed && !orderIsPendingProForma(refreshed)) {
+      setSelected(refreshed);
+    } else {
+      setSelected((prev) => (prev?.id === orderId ? null : prev));
+    }
   }, []);
 
   const handleStatusChange = useCallback(
@@ -1541,6 +1560,9 @@ export default function AdminPedidosPage() {
           sess?.user?.name?.trim() || sess?.user?.email?.trim() || undefined,
         documentModel,
       });
+      if (documentModel === "FACTURA_POR_FORMA") {
+        await refreshOrderInList(o.id);
+      }
     } catch (err) {
       window.alert(
         err instanceof Error
@@ -1553,15 +1575,28 @@ export default function AdminPedidosPage() {
       listReceiptLockRef.current = false;
       setListReceiptPrintingId(null);
     }
-  }, []);
+  }, [refreshOrderInList]);
 
   const dateScopedOrders = useMemo(
-    () => orders.filter((o) => orderMatchesDatePeriod(o.createdAt, datePeriod)),
+    () =>
+      queueOrders.filter((o) => orderMatchesDatePeriod(o.createdAt, datePeriod)),
+    [queueOrders, datePeriod],
+  );
+
+  const dateScopedDrafts = useMemo(
+    () =>
+      orders.filter(
+        (o) =>
+          orderBelongsInDraftBucket(o) &&
+          orderMatchesDatePeriod(o.createdAt, datePeriod),
+      ),
     [orders, datePeriod],
   );
 
-  const visible = dateScopedOrders.filter((o) => {
-    if (filter && o.status !== filter) return false;
+  const visibleSource = filter === "DRAFT" ? dateScopedDrafts : dateScopedOrders;
+
+  const visible = visibleSource.filter((o) => {
+    if (filter && filter !== "DRAFT" && o.status !== filter) return false;
     if (search) {
       const q = search.toLowerCase();
       if (
@@ -1602,7 +1637,7 @@ export default function AdminPedidosPage() {
 
   const datePeriodCounts = useMemo(() => {
     const m: Record<DatePeriodFilter, number> = {
-      "": orders.length,
+      "": queueOrders.length,
       today: 0,
       yesterday: 0,
       "7d": 0,
@@ -1611,7 +1646,7 @@ export default function AdminPedidosPage() {
       "6m": 0,
       "1y": 0,
     };
-    for (const o of orders) {
+    for (const o of queueOrders) {
       if (orderMatchesDatePeriod(o.createdAt, "today")) m.today += 1;
       if (orderMatchesDatePeriod(o.createdAt, "yesterday")) m.yesterday += 1;
       if (orderMatchesDatePeriod(o.createdAt, "7d")) m["7d"] += 1;
@@ -1621,7 +1656,7 @@ export default function AdminPedidosPage() {
       if (orderMatchesDatePeriod(o.createdAt, "1y")) m["1y"] += 1;
     }
     return m;
-  }, [orders]);
+  }, [queueOrders]);
 
   const clearListFilters = useCallback(() => {
     setSearch("");
@@ -1644,7 +1679,7 @@ export default function AdminPedidosPage() {
             <p className="mt-0.5 text-xs text-zinc-500">
               {hidePaymentAndMoney ? (
                 <>
-                  {orders.length} pedido{orders.length !== 1 ? "s" : ""} na vista
+                  {queueOrders.length} pedido{queueOrders.length !== 1 ? "s" : ""} na vista
                   operacional
                   {listFiltered ? (
                     <span>
@@ -1659,8 +1694,8 @@ export default function AdminPedidosPage() {
                 </>
               ) : (
                 <>
-                  {orders.length} pedido{orders.length !== 1 ? "s" : ""} carregado
-                  {orders.length !== 1 ? "s" : ""}
+                  {queueOrders.length} pedido{queueOrders.length !== 1 ? "s" : ""} carregado
+                  {queueOrders.length !== 1 ? "s" : ""}
                   {listFiltered ? (
                     <span>
                       {" "}
@@ -1747,7 +1782,9 @@ export default function AdminPedidosPage() {
           />
           <PedidosKpiCard
             label="Total na lista"
-            value={String(datePeriod ? dateScopedOrders.length : orders.length)}
+            value={String(
+              datePeriod ? dateScopedOrders.length : queueOrders.length,
+            )}
             hint={
               datePeriod
                 ? `Filtrado · amostra máxima 200`
@@ -1781,12 +1818,12 @@ export default function AdminPedidosPage() {
               Filtra por data de criação, fase ou localiza pelo nº do pedido ou cliente.
             </p>
           </div>
-          {!loading && orders.length > 0 ? (
+          {!loading && queueOrders.length > 0 ? (
             <p className="text-[11px] tabular-nums text-zinc-500">
               <span className="font-semibold text-zinc-300">{visible.length}</span>
               {" · "}
               {listFiltered ? "resultado(s) com filtros" : "visíveis"} de{" "}
-              <span className="text-zinc-400">{orders.length}</span> na amostra
+              <span className="text-zinc-400">{queueOrders.length}</span> na amostra
             </p>
           ) : null}
         </div>
@@ -1867,7 +1904,9 @@ export default function AdminPedidosPage() {
                 const count =
                   opt.value === ""
                     ? dateScopedOrders.length
-                    : (statusCounts[opt.value] ?? 0);
+                    : opt.value === "DRAFT"
+                      ? dateScopedDrafts.length
+                      : (statusCounts[opt.value] ?? 0);
                 return (
                   <button
                     key={opt.value || "all"}
@@ -1991,7 +2030,9 @@ export default function AdminPedidosPage() {
                       <span
                         className={`inline-flex rounded-md px-2 py-0.5 text-[10px] font-semibold ring-1 ${statusColor(o.status)}`}
                       >
-                        {orderStatusLabel(o.status)}
+                        {orderIsPendingProForma(o)
+                          ? "Rascunho"
+                          : orderStatusLabel(o.status)}
                       </span>
                       {unread > 0 ? (
                         <span className="inline-flex items-center gap-1 rounded-full bg-sky-400/15 px-2 py-0.5 text-[10px] font-bold text-sky-300">
@@ -2097,7 +2138,7 @@ export default function AdminPedidosPage() {
               {listFiltered ? (
                 <span className="text-zinc-600">
                   {" "}
-                  (filtros activos · total na amostra {orders.length})
+                  (filtros activos · total na amostra {queueOrders.length})
                 </span>
               ) : null}
             </p>
@@ -2191,7 +2232,9 @@ export default function AdminPedidosPage() {
                       <span
                         className={`inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-semibold ring-1 ${statusColor(o.status)}`}
                       >
-                        {orderStatusLabel(o.status)}
+                        {orderIsPendingProForma(o)
+                          ? "Rascunho"
+                          : orderStatusLabel(o.status)}
                       </span>
                       <div className="mt-2 opacity-95">
                         <OrderPhaseStrip

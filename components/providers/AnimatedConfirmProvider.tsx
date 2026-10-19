@@ -17,6 +17,8 @@ import { runOverlayEnter, runOverlayExitThen } from "@/lib/anime-ui";
 export type AnimatedConfirmOptions = {
   title?: string;
   message: string;
+  /** Linha extra, mais discreta (destino, custo, aviso). */
+  hint?: string;
   confirmLabel?: string;
   cancelLabel?: string;
   destructive?: boolean;
@@ -121,22 +123,34 @@ function ConfirmLayer({
         role="dialog"
         aria-modal="true"
         aria-labelledby="animated-confirm-title"
-        className="relative z-10 w-full max-w-md cursor-default rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl pointer-events-auto dark:border-zinc-700 dark:bg-zinc-900"
+        className="relative z-10 w-full max-w-[26rem] cursor-default overflow-hidden rounded-2xl border border-white/10 bg-zinc-950 shadow-[0_24px_80px_-24px_rgba(0,0,0,0.8)] pointer-events-auto"
       >
+        <div
+          className={`h-1 ${destructive ? "bg-red-500" : "bg-gradient-to-r from-amber-400 to-orange-500"}`}
+        />
+        <div className="p-6">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-400/85">
+          Confirmação
+        </p>
         <h2
           id="animated-confirm-title"
-          className="text-lg font-bold text-zinc-900 dark:text-white"
+          className="mt-1 text-lg font-bold tracking-tight text-white"
         >
-          {pending.title ?? "Confirmação"}
+          {pending.title ?? "Confirmar acção"}
         </h2>
-        <p className="mt-3 text-sm leading-relaxed text-zinc-600 dark:text-zinc-300">
+        <p className="mt-3 text-sm leading-relaxed text-zinc-400">
           {pending.message}
         </p>
+        {pending.hint ? (
+          <p className="mt-3 rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-2.5 text-[13px] leading-relaxed text-zinc-300">
+            {pending.hint}
+          </p>
+        ) : null}
         <div className="mt-6 flex flex-wrap justify-end gap-2">
           <button
             type="button"
             onClick={() => close(false)}
-            className="rounded-xl border border-zinc-300 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-800 transition hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700"
+            className="rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-semibold text-zinc-300 transition hover:bg-white/[0.08] hover:text-white"
           >
             {cancelLabel}
           </button>
@@ -145,12 +159,13 @@ function ConfirmLayer({
             onClick={() => close(true)}
             className={
               destructive
-                ? "rounded-xl bg-red-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-red-500"
-                : "rounded-xl bg-amber-500 px-4 py-2.5 text-sm font-bold text-black shadow-sm transition hover:bg-amber-400"
+                ? "rounded-xl bg-red-500 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-red-400"
+                : "rounded-xl bg-gradient-to-r from-amber-400 to-orange-500 px-4 py-2.5 text-sm font-bold text-zinc-950 shadow-sm shadow-amber-500/20 transition hover:brightness-105"
             }
           >
             {confirmLabel}
           </button>
+        </div>
         </div>
         </div>
       </div>
