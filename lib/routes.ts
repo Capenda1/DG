@@ -10,6 +10,8 @@ export const ROUTES = {
   loginRecuperar: "/login/recuperar",
   loginVerificar: "/login/verificar",
   loginRedefinir: "/login/redefinir",
+  /** Política de privacidade, pública, usada também na Play Store. */
+  privacy: "/privacidade",
   home: "/",
   /** Área para utilizadores com perfil Cliente. */
   account: "/conta",

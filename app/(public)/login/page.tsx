@@ -453,6 +453,14 @@ export default function LoginPage() {
                       ? "Ir para a Área do Cliente"
                       : "Criar conta"}
                   </Link>
+                  <p className="mt-3">
+                    <Link
+                      href={ROUTES.privacy}
+                      className="underline-offset-2 hover:underline"
+                    >
+                      Política de privacidade
+                    </Link>
+                  </p>
                 </div>
               ) : null}
             </div>

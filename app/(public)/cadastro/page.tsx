@@ -374,6 +374,14 @@ export default function ClientRegisterPage() {
                   >
                     Entrar
                   </Link>
+                  <p className="mt-3">
+                    <Link
+                      href={ROUTES.privacy}
+                      className="underline-offset-2 hover:underline"
+                    >
+                      Política de privacidade
+                    </Link>
+                  </p>
                 </div>
               </div>
             </div>
