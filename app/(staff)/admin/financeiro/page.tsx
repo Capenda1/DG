@@ -99,7 +99,7 @@ export default function AdminFinanceiroPage() {
   }, [from, to, isAdmin, ledgerFilters]);
 
   useEffect(() => {
-    if (meRole !== "ADMIN") return;
+    if (meRole !== "ADMIN" && meRole !== "MANAGER") return;
     void refreshReports();
   }, [meRole, refreshReports]);
 
@@ -165,12 +165,12 @@ export default function AdminFinanceiroPage() {
     }
   }
 
-  if (meRole && meRole !== "ADMIN") {
+  if (meRole && meRole !== "ADMIN" && meRole !== "MANAGER") {
     return (
       <div className="min-h-[40vh] px-4 py-12">
         <p className="mb-4 text-center text-sm text-zinc-600 dark:text-zinc-400">
           A área de finanças (razão, relatórios e exportações) é apenas para
-          administradores. Para turno de caixa e fechos, use{" "}
+          administradores e gerentes. Para turno de caixa e fechos, use{" "}
           <Link
             href={ROUTES.admin.caixa}
             className="font-semibold text-amber-600 underline dark:text-amber-400"

@@ -121,9 +121,15 @@ export default function AdminCaixaPage() {
   }, [session]);
 
   useEffect(() => {
-    if (meRole !== "ADMIN" && meRole !== "ATTENDANT") return;
+    if (
+      meRole !== "ADMIN" &&
+      meRole !== "MANAGER" &&
+      meRole !== "ATTENDANT"
+    ) {
+      return;
+    }
     void loadSessionData();
-    if ((meRole === "ADMIN" || meRole === "MANAGER")) void loadHistory();
+    if (meRole === "ADMIN" || meRole === "MANAGER") void loadHistory();
     else setHistory([]);
   }, [meRole, loadSessionData, loadHistory]);
 
