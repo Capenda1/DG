@@ -38,6 +38,7 @@ const ROLES: { value: UserRole; label: string }[] = [
   { value: "CLIENT", label: "Cliente" },
   { value: "DESIGNER", label: "Designer" },
   { value: "ATTENDANT", label: "Atendente" },
+  { value: "MANAGER", label: "Gerente" },
   { value: "ADMIN", label: "Administrador" },
   { value: "COLLABORATOR", label: "Colaborador (sem acesso)" },
 ];
@@ -46,6 +47,7 @@ const ROLES: { value: UserRole; label: string }[] = [
 const ROLES_TEAM: { value: UserRole; label: string }[] = [
   { value: "DESIGNER", label: "Designer" },
   { value: "ATTENDANT", label: "Atendente" },
+  { value: "MANAGER", label: "Gerente" },
   { value: "ADMIN", label: "Administrador" },
   { value: "COLLABORATOR", label: "Colaborador (sem acesso)" },
 ];
@@ -113,6 +115,7 @@ function RoleBadge({ role }: { role: string }) {
     CLIENT: "bg-zinc-500/20 text-zinc-200 ring-zinc-400/20",
     DESIGNER: "bg-violet-500/20 text-violet-200 ring-violet-400/25",
     ATTENDANT: "bg-teal-500/20 text-teal-100 ring-teal-400/25",
+    MANAGER: "bg-emerald-500/20 text-emerald-100 ring-emerald-400/25",
     ADMIN: "bg-amber-500/20 text-amber-100 ring-amber-400/30",
     COLLABORATOR: "bg-sky-500/15 text-sky-200 ring-sky-400/25",
   };
@@ -249,7 +252,13 @@ export function AdminUsersManager({
       return "CLIENT";
     }
     const r = searchParams.get("role");
-    if (r === "DESIGNER" || r === "ATTENDANT" || r === "ADMIN" || r === "COLLABORATOR") {
+    if (
+      r === "DESIGNER" ||
+      r === "ATTENDANT" ||
+      r === "MANAGER" ||
+      r === "ADMIN" ||
+      r === "COLLABORATOR"
+    ) {
       return r;
     }
     return undefined;
@@ -311,7 +320,13 @@ export function AdminUsersManager({
       return;
     }
     const r = searchParams.get("role");
-    if (r === "DESIGNER" || r === "ATTENDANT" || r === "ADMIN" || r === "COLLABORATOR") {
+    if (
+      r === "DESIGNER" ||
+      r === "ATTENDANT" ||
+      r === "MANAGER" ||
+      r === "ADMIN" ||
+      r === "COLLABORATOR"
+    ) {
       setCreateRole(r);
     }
   }, [searchParams, variant]);

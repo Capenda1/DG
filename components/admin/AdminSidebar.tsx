@@ -193,10 +193,25 @@ const NAV_ATTENDANT_GROUPS: NavGroup[] = [
   },
 ];
 
+/** Menu gerente: igual ao admin, sem Utilizadores nem Configurações Globais. */
+const NAV_MANAGER_GROUPS: NavGroup[] = ADMIN_NAV_GROUPS.map((group) => {
+  if (group.title !== "Administrativo") return group;
+  return {
+    ...group,
+    items: group.items.filter(
+      (item) =>
+        item.href !== ROUTES.admin.utilizadores &&
+        item.href !== ROUTES.admin.configuracoes,
+    ),
+  };
+}).filter((group) => group.items.length > 0);
+
 function roleSubtitle(role: string): string {
   switch (normalizeUserRole(role)) {
     case "ADMIN":
       return "ADMINISTRADOR";
+    case "MANAGER":
+      return "GERENTE";
     case "DESIGNER":
       return "DESIGNER";
     case "ATTENDANT":
@@ -236,6 +251,7 @@ export function AdminSidebar({
     const r = normalizeUserRole(user.role);
     if (r === "DESIGNER") return NAV_DESIGNER_GROUPS;
     if (r === "ATTENDANT") return NAV_ATTENDANT_GROUPS;
+    if (r === "MANAGER") return NAV_MANAGER_GROUPS;
     return ADMIN_NAV_GROUPS;
   }, [user.role]);
 

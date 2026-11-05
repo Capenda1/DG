@@ -116,7 +116,7 @@ export class SettingsController {
    * Definições completas (incl. formato de papel do comprovante) — apenas operação interna.
    */
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.ATTENDANT)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.ATTENDANT)
   @Get('payment')
   getPayment() {
     return this.settingsService.getPaymentSettings();
@@ -127,7 +127,7 @@ export class SettingsController {
    * Leitura para qualquer utilizador autenticado na área cliente / pré-visualização (igual a `business`).
    */
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.ATTENDANT, UserRole.CLIENT, UserRole.DESIGNER)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.ATTENDANT, UserRole.CLIENT, UserRole.DESIGNER)
   @Get('payment/client')
   getPaymentClient() {
     return this.settingsService.getClientCheckoutPaymentSettings();
@@ -138,7 +138,7 @@ export class SettingsController {
    * Leitura permitida a quem está autenticado (área cliente / operação).
    */
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.ATTENDANT, UserRole.CLIENT)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.ATTENDANT, UserRole.CLIENT)
   @Get('business')
   getBusinessProfile() {
     return this.settingsService.getBusinessProfile();
@@ -148,7 +148,7 @@ export class SettingsController {
    * Identidade institucional para cabeçalhos de PDFs, relatórios e exports.
    */
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.ATTENDANT, UserRole.CLIENT)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.ATTENDANT, UserRole.CLIENT)
   @Get('document-branding')
   getDocumentBranding(): Promise<DocumentBranding> {
     return this.settingsService.getDocumentBranding();
@@ -182,7 +182,7 @@ export class SettingsController {
 
   /** Texto de rodapé do comprovante (só emissão pela operação). */
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.ATTENDANT)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.ATTENDANT)
   @Get('payment/receipt-footer')
   getPaymentReceiptFooter() {
     return this.settingsService

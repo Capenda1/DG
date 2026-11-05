@@ -26,6 +26,7 @@ import {
   normalizeUserRole,
   pathnameAllowedForAttendantRole,
   pathnameAllowedForDesignerRole,
+  pathnameDeniedForManagerRole,
   ROUTES,
 } from "@/lib/routes";
 import { DesignerOrderChatFab } from "@/components/chat/DesignerOrderChatFab";
@@ -209,6 +210,18 @@ export function AdminAppShell({ children }: { children: ReactNode }) {
     if (roleRedirectRef.current === ROUTES.admin.pedidoBalcao) return;
     roleRedirectRef.current = ROUTES.admin.pedidoBalcao;
     router.replace(ROUTES.admin.pedidoBalcao);
+  }, [checked, session?.user, pathname, router]);
+
+  useEffect(() => {
+    if (!checked || !session?.user) return;
+    if (normalizeUserRole(session.user.role) !== "MANAGER") return;
+    if (!pathnameDeniedForManagerRole(pathname)) {
+      roleRedirectRef.current = null;
+      return;
+    }
+    if (roleRedirectRef.current === ROUTES.admin.root) return;
+    roleRedirectRef.current = ROUTES.admin.root;
+    router.replace(ROUTES.admin.root);
   }, [checked, session?.user, pathname, router]);
 
   function logout() {

@@ -155,7 +155,7 @@ export default function LoginPage() {
     const roleDefault = postLoginPath(role);
     if (roleDefault === ROUTES.login) {
       setError(
-        "Este perfil não é reconhecido. O papel da conta deve ser CLIENT, ADMIN, DESIGNER ou ATTENDANT.",
+        "Este perfil não é reconhecido. O papel da conta deve ser CLIENT, ADMIN, MANAGER, DESIGNER ou ATTENDANT.",
       );
       return;
     }

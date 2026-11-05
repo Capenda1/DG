@@ -61,7 +61,7 @@ export default function AdminFinanceiroPage() {
     setMeRole(loadSession()?.user?.role ?? null);
   }, []);
 
-  const isAdmin = meRole === "ADMIN";
+  const isAdmin = (meRole === "ADMIN" || meRole === "MANAGER");
 
   const ledgerFilters = useMemo(
     () => ({

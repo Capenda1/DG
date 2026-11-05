@@ -559,7 +559,7 @@ export default function AdminInsumosStockPage() {
   const [editMsg, setEditMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    setIsAdmin(loadSession()?.user?.role === "ADMIN");
+    setIsAdmin((loadSession()?.user?.role === "ADMIN" || loadSession()?.user?.role === "MANAGER"));
   }, []);
 
   useEffect(() => {

@@ -54,7 +54,7 @@ export class FinanceController {
 
   /** Turno de caixa aberto (se existir). */
   @Get('pdv-session/current')
-  @Roles(UserRole.ADMIN, UserRole.ATTENDANT)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.ATTENDANT)
   async currentSession(@Req() req: Request) {
     const session = await this.finance.getCurrentPdvSession(this.user(req));
     /** Objecto explícito — Nest/Express pode enviar corpo vazio com `return null`, o que parte `response.json()`. */
@@ -63,21 +63,21 @@ export class FinanceController {
 
   /** Totais do turno aberto (esperado em numerário, vendas por método). */
   @Get('pdv-session/current/summary')
-  @Roles(UserRole.ADMIN, UserRole.ATTENDANT)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.ATTENDANT)
   openSessionSummary(@Req() req: Request) {
     return this.finance.getOpenSessionSummary(this.user(req));
   }
 
   /** Movimentos de suprimento / saída registados durante o turno aberto (auditoria). */
   @Get('pdv-session/current/movements')
-  @Roles(UserRole.ADMIN, UserRole.ATTENDANT)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.ATTENDANT)
   openSessionMovements(@Req() req: Request) {
     return this.finance.listCurrentPdvSessionMovements(this.user(req));
   }
 
   /** Regista entrada de numerário durante o turno (suprimento). */
   @Post('pdv-session/movement/supplement')
-  @Roles(UserRole.ADMIN, UserRole.ATTENDANT)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.ATTENDANT)
   recordSupplement(@Req() req: Request, @Body() dto: PdvMovementDto) {
     return this.finance.recordPdvSupplement(
       this.user(req),
@@ -88,7 +88,7 @@ export class FinanceController {
 
   /** Regista saída de numerário durante o turno (obrigatório justificar). */
   @Post('pdv-session/movement/withdrawal')
-  @Roles(UserRole.ADMIN, UserRole.ATTENDANT)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.ATTENDANT)
   recordWithdrawal(@Req() req: Request, @Body() dto: PdvMovementDto) {
     return this.finance.recordPdvWithdrawal(
       this.user(req),
@@ -99,19 +99,19 @@ export class FinanceController {
 
   /** Últimos turnos fechados (reconciliação) — só administrador. */
   @Get('pdv-session/history')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
   pdvHistory(@Req() req: Request, @Query() q: PdvHistoryQueryDto) {
     return this.finance.listClosedPdvSessions(this.user(req), q.take ?? 15);
   }
 
   @Post('pdv-session/open')
-  @Roles(UserRole.ADMIN, UserRole.ATTENDANT)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.ATTENDANT)
   openSession(@Req() req: Request, @Body() dto: OpenPdvSessionDto) {
     return this.finance.openPdvSession(this.user(req), dto.openingFloat);
   }
 
   @Post('pdv-session/close')
-  @Roles(UserRole.ADMIN, UserRole.ATTENDANT)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.ATTENDANT)
   closeSession(@Req() req: Request, @Body() dto: ClosePdvSessionDto) {
     return this.finance.closePdvSession(this.user(req), dto.declaredCash, {
       closeNotes: dto.closeNotes,
@@ -122,7 +122,7 @@ export class FinanceController {
   /* ─── Fluxo de caixa (tesouraria, só ADMIN) ─── */
 
   @Put('treasury/opening')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
   upsertTreasuryOpeningBalance(
     @Req() req: Request,
     @Body() dto: TreasuryOpeningDto,
@@ -136,7 +136,7 @@ export class FinanceController {
   }
 
   @Get('treasury/opening')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
   getTreasuryOpeningBalance(
     @Req() req: Request,
     @Query() q: TreasuryOpeningQueryDto,
@@ -145,7 +145,7 @@ export class FinanceController {
   }
 
   @Post('cash-flow/receipt-other')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
   cashFlowReceiptOther(
     @Req() req: Request,
     @Body() dto: CashFlowOtherReceiptDto,
@@ -161,7 +161,7 @@ export class FinanceController {
   }
 
   @Post('cash-flow/expense')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
   cashFlowExpense(@Req() req: Request, @Body() dto: CashFlowExpenseDto) {
     const u = this.user(req);
     return this.finance.recordCashExpense(
@@ -173,7 +173,7 @@ export class FinanceController {
   }
 
   @Get('cash-flow/report')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
   cashFlowReport(@Req() req: Request, @Query() q: CashFlowReportQueryDto) {
     return this.finance.cashFlowReport(
       this.user(req),
@@ -185,13 +185,13 @@ export class FinanceController {
   }
 
   @Get('cash-flow/projections')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
   listCashFlowProjections(@Req() req: Request, @Query() q: ProjectionRangeDto) {
     return this.finance.listCashFlowProjections(this.user(req), q.from, q.to);
   }
 
   @Post('cash-flow/projection')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
   createCashFlowProjection(
     @Req() req: Request,
     @Body() dto: CashFlowProjectionUpsertDto,
@@ -206,21 +206,21 @@ export class FinanceController {
   }
 
   @Delete('cash-flow/projection/:id')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
   deleteCashFlowProjection(@Req() req: Request, @Param('id') id: string) {
     return this.finance.deleteCashFlowProjection(this.user(req), id);
   }
 
   /** Resumo de vendas a partir do razão (após activação do módulo). */
   @Get('sales-summary')
-  @Roles(UserRole.ADMIN, UserRole.ATTENDANT)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.ATTENDANT)
   salesSummary(@Req() req: Request, @Query() q: FinanceDateRangeDto) {
     const { from, to } = this.parseRange(q);
     return this.finance.salesSummary(from, to, this.user(req));
   }
 
   @Get('ledger')
-  @Roles(UserRole.ADMIN, UserRole.ATTENDANT)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.ATTENDANT)
   ledger(@Req() req: Request, @Query() q: FinanceLedgerQueryDto) {
     const { from, to } = this.parseRange(q);
     const take = q.take ?? 200;
@@ -231,7 +231,7 @@ export class FinanceController {
   }
 
   @Get('export/sales.csv')
-  @Roles(UserRole.ADMIN, UserRole.ATTENDANT)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.ATTENDANT)
   @Header('Content-Type', 'text/csv; charset=utf-8')
   async exportSalesCsv(
     @Req() req: Request,
@@ -248,7 +248,7 @@ export class FinanceController {
   }
 
   @Get('export/ledger.csv')
-  @Roles(UserRole.ADMIN, UserRole.ATTENDANT)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.ATTENDANT)
   @Header('Content-Type', 'text/csv; charset=utf-8')
   async exportLedgerCsv(
     @Req() req: Request,
@@ -269,7 +269,7 @@ export class FinanceController {
 
   /** Margem aproximada: linhas STORE_RETAIL ao balcão vs custo unitário do insumo. */
   @Get('margin/balcao-retail')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
   marginBalcaoRetail(@Req() req: Request, @Query() q: FinanceDateRangeDto) {
     const { from, to } = this.parseRange(q);
     return this.finance.balcaoRetailMargin(from, to, this.user(req));

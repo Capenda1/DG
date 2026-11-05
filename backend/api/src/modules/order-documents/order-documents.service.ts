@@ -62,6 +62,7 @@ export class OrderDocumentsService {
       );
     } else if (
       user.role !== UserRole.ADMIN &&
+      user.role !== UserRole.MANAGER &&
       user.role !== UserRole.ATTENDANT
     ) {
       throw new ForbiddenException('Sem permissão para emitir documentos.');

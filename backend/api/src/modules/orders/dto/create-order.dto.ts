@@ -80,6 +80,11 @@ export class CreateOrderDto {
   @MaxLength(4000)
   notes?: string;
 
+  /** Repetir o mesmo valor devolve o pedido já criado, em vez de outro. */
+  @IsOptional()
+  @IsUUID('4')
+  clientMutationId?: string;
+
   @IsArray()
   @ArrayMinSize(1)
   @ValidateNested({ each: true })

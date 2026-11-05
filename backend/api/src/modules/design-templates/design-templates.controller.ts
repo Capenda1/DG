@@ -28,9 +28,13 @@ import { UpdateDesignTemplateDto } from './dto/update-design-template.dto';
 type AuthUser = { id: string; role: UserRole };
 
 function requireStaff(user: AuthUser) {
-  if (user.role !== 'ADMIN' && user.role !== 'DESIGNER') {
+  if (
+    user.role !== 'ADMIN' &&
+    user.role !== 'MANAGER' &&
+    user.role !== 'DESIGNER'
+  ) {
     throw new ForbiddenException(
-      'Apenas Admin ou Designer podem gerir templates.',
+      'Apenas Admin, Gerente ou Designer podem gerir templates.',
     );
   }
 }

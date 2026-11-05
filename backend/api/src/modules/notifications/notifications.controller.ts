@@ -22,7 +22,7 @@ import { TwilioSmsService } from './twilio-sms.service';
 
 @Controller('notifications')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.ADMIN, UserRole.ATTENDANT)
+@Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.ATTENDANT)
 export class NotificationsController {
   constructor(
     private readonly notifications: NotificationsService,

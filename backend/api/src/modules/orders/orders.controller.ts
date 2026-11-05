@@ -58,14 +58,14 @@ export class OrdersController {
 
   @Get('counter/clients')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.ATTENDANT)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.ATTENDANT)
   searchCounterClients(@Query('q') q?: string) {
     return this.ordersService.searchClientsForCounter(q ?? '');
   }
 
   @Get('counter/drafts')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.ATTENDANT)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.ATTENDANT)
   listCounterDrafts(
     @Req() req: Request & { user: { id: string; role: UserRole } },
   ) {
@@ -74,7 +74,7 @@ export class OrdersController {
 
   @Get('counter/insumos')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.ATTENDANT)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.ATTENDANT)
   listCounterInsumosCatalog() {
     return this.ordersService.listCounterInsumosCatalog();
   }
@@ -82,7 +82,7 @@ export class OrdersController {
   /** Grava cliente (CLIENT) na base — usado pelo registo rápido antes de criar o pedido. */
   @Post('counter/clients')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.ATTENDANT)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.ATTENDANT)
   registerCounterQuickClient(
     @Body() dto: QuickBalcaoClientDto,
     @Req() req: Request & { user: { id: string; role: UserRole } },
@@ -92,7 +92,7 @@ export class OrdersController {
 
   @Post('counter')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.ATTENDANT)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.ATTENDANT)
   createCounter(
     @Body() dto: CreateCounterOrderDto,
     @Req() req: Request & { user: { id: string; role: UserRole } },
@@ -102,7 +102,7 @@ export class OrdersController {
 
   @Patch(':id/counter-items')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.ATTENDANT)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.ATTENDANT)
   replaceCounterItems(
     @Param('id') id: string,
     @Body() dto: ReplaceCounterOrderItemsDto,
@@ -249,7 +249,7 @@ export class OrdersController {
    */
   @Post(':id/share-draft-with-design-team')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.ATTENDANT)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.ATTENDANT)
   shareDraftWithDesignTeam(
     @Param('id') id: string,
     @Req() req: Request & { user: { id: string; role: UserRole } },
@@ -303,7 +303,7 @@ export class OrdersController {
   /** Histórico e contactos para aviso manual ao cliente (SMS / email / WhatsApp). */
   @Get(':id/customer-notifications')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.ATTENDANT, UserRole.DESIGNER)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.ATTENDANT, UserRole.DESIGNER)
   getCustomerNotifications(
     @Param('id') id: string,
     @Req() req: Request & { user: { id: string; role: UserRole } },
@@ -317,7 +317,7 @@ export class OrdersController {
    */
   @Post(':id/notify')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.ATTENDANT, UserRole.DESIGNER)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.ATTENDANT, UserRole.DESIGNER)
   notifyCustomer(
     @Param('id') id: string,
     @Req() req: Request & { user: { id: string; role: UserRole } },
@@ -334,7 +334,7 @@ export class OrdersController {
   /** Reverte o cancelamento, incluindo stock e lançamento financeiro compensatório. */
   @Post(':id/reopen')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
   reopenCancelledOrder(
     @Param('id') id: string,
     @Req() req: Request & { user: { id: string; role: UserRole } },
@@ -357,7 +357,7 @@ export class OrdersController {
    */
   @Patch(':id/quote')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.ATTENDANT)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.ATTENDANT)
   saveBalcaoQuote(
     @Param('id') id: string,
     @Body() dto: SaveBalcaoQuoteDto,
@@ -410,7 +410,7 @@ export class OrdersController {
       discountForSubmit = Math.round(n * 100) / 100;
     }
     const staffSubmit =
-      req.user.role === UserRole.ADMIN || req.user.role === UserRole.ATTENDANT;
+      req.user.role === UserRole.ADMIN || req.user.role === UserRole.MANAGER || req.user.role === UserRole.ATTENDANT;
     let notesForSubmit: string | undefined;
     let receptionDateForSubmit: string | undefined;
     if (staffSubmit) {

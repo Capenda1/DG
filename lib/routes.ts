@@ -67,8 +67,22 @@ export function isStaffRole(role: string): boolean {
   const r = normalizeUserRole(role);
   return (
     r === "ADMIN" ||
+    r === "MANAGER" ||
     r === "DESIGNER" ||
     r === "ATTENDANT"
+  );
+}
+
+/** Rotas /admin bloqueadas ao gerente (gestão de contas e configurações globais). */
+export const MANAGER_ADMIN_DENIED_HREFS = [
+  ROUTES.admin.utilizadores,
+  ROUTES.admin.configuracoes,
+] as const;
+
+export function pathnameDeniedForManagerRole(pathname: string): boolean {
+  const p = normalizeAppPathname(pathname);
+  return MANAGER_ADMIN_DENIED_HREFS.some(
+    (href) => p === href || p.startsWith(`${href}/`),
   );
 }
 
@@ -85,7 +99,7 @@ export function staffMayViewOrderArtInPedidosPanel(
   orderAttendantId: string | null,
 ): boolean {
   const r = normalizeUserRole(role);
-  if (r === "ADMIN" || r === "DESIGNER") return true;
+  if (r === "ADMIN" || r === "MANAGER" || r === "DESIGNER") return true;
   if (r !== "ATTENDANT") return false;
   return Boolean(
     sessionUserId && orderAttendantId && orderAttendantId === sessionUserId,
@@ -98,7 +112,12 @@ export function staffMayViewOrderArtInPedidosPanel(
  */
 export function canAccessPedidoModelagemRoute(role: string): boolean {
   const r = normalizeUserRole(role);
-  return r === "ADMIN" || r === "DESIGNER" || r === "ATTENDANT";
+  return (
+    r === "ADMIN" ||
+    r === "MANAGER" ||
+    r === "DESIGNER" ||
+    r === "ATTENDANT"
+  );
 }
 
 /** Rotas /admin permitidas para perfil DESIGNER (resto redirecciona). */
@@ -157,6 +176,9 @@ export function adminHomePathForRole(role: string): string {
   if (r === "ATTENDANT") {
     return ROUTES.admin.vendas.pedidoBalcao;
   }
+  if (r === "MANAGER") {
+    return ROUTES.admin.root;
+  }
   return ROUTES.admin.root;
 }
 
@@ -186,7 +208,7 @@ export function modelagemExitOverviewHref(
 ): string {
   const r = normalizeUserRole(role);
   if (r === "DESIGNER") return ROUTES.admin.designer;
-  if (r === "ATTENDANT" || r === "ADMIN") {
+  if (r === "ATTENDANT" || r === "ADMIN" || r === "MANAGER") {
     return opts?.orderOrigin === "BALCAO"
       ? ROUTES.admin.pedidoBalcao
       : ROUTES.admin.pedidos;
@@ -214,7 +236,7 @@ export function postLoginPath(role: string): string {
   if (r === "ATTENDANT") {
     return ROUTES.admin.vendas.pedidoBalcao;
   }
-  if (r === "ADMIN") {
+  if (r === "ADMIN" || r === "MANAGER") {
     return ROUTES.admin.root;
   }
   if (r === "CLIENT") {

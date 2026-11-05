@@ -75,17 +75,21 @@ export class FinanceService {
   }
 
   assertFinanceStaff(role: UserRole): void {
-    if (role !== UserRole.ADMIN && role !== UserRole.ATTENDANT) {
+    if (
+      role !== UserRole.ADMIN &&
+      role !== UserRole.MANAGER &&
+      role !== UserRole.ATTENDANT
+    ) {
       throw new ForbiddenException(
-        'Apenas administrador ou atendente pode aceder ao módulo financeiro.',
+        'Apenas administrador, gerente ou atendente pode aceder ao módulo financeiro.',
       );
     }
   }
 
   assertFinanceAdmin(role: UserRole): void {
-    if (role !== UserRole.ADMIN) {
+    if (role !== UserRole.ADMIN && role !== UserRole.MANAGER) {
       throw new ForbiddenException(
-        'Apenas administrador pode aceder a esta função.',
+        'Apenas administrador ou gerente pode aceder a esta função.',
       );
     }
   }
@@ -555,9 +559,9 @@ export class FinanceService {
   }
 
   listClosedPdvSessions(user: { role: UserRole }, take: number) {
-    if (user.role !== UserRole.ADMIN) {
+    if (user.role !== UserRole.ADMIN && user.role !== UserRole.MANAGER) {
       throw new ForbiddenException(
-        'Apenas administrador pode consultar o histórico de turnos fechados.',
+        'Apenas administrador ou gerente pode consultar o histórico de turnos fechados.',
       );
     }
     return this.prisma.pdvCashSession.findMany({
@@ -968,9 +972,9 @@ export class FinanceService {
   }
 
   async balcaoRetailMargin(from: Date, to: Date, user: { role: UserRole }) {
-    if (user.role !== UserRole.ADMIN) {
+    if (user.role !== UserRole.ADMIN && user.role !== UserRole.MANAGER) {
       throw new ForbiddenException(
-        'Apenas administradores podem ver o relatório de margem de retalho ao balcão.',
+        'Apenas administrador ou gerente pode ver o relatório de margem de retalho ao balcão.',
       );
     }
 

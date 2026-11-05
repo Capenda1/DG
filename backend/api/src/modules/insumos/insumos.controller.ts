@@ -31,7 +31,7 @@ import type { SessionUser } from '../auth/types/session-user.type';
  */
 @Controller('insumos')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.ADMIN)
+@Roles(UserRole.ADMIN, UserRole.MANAGER)
 export class InsumosController {
   constructor(private readonly service: InsumosService) {}
 
@@ -47,7 +47,7 @@ export class InsumosController {
   }
 
   @Post('catalog-lists/items')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
   addCatalogItem(@Body() dto: AddInsumoCatalogItemDto) {
     return this.service.addInsumoCatalogItem(dto.kind, dto.value);
   }
@@ -58,13 +58,13 @@ export class InsumosController {
   }
 
   @Post('consumos')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
   createConsumo(@Body() dto: CreateConsumoDto) {
     return this.service.createConsumo(dto);
   }
 
   @Delete('consumos/:consumoId')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
   deleteConsumo(@Param('consumoId') consumoId: string) {
     return this.service.deleteConsumo(consumoId);
   }
@@ -75,7 +75,7 @@ export class InsumosController {
   }
 
   @Post()
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
   create(@Body() dto: CreateInsumoDto) {
     return this.service.createInsumo(dto);
   }
@@ -89,7 +89,7 @@ export class InsumosController {
   }
 
   @Post(':id/movimentos')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
   addMovimento(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: CreateMovimentoDto,
@@ -104,13 +104,13 @@ export class InsumosController {
   }
 
   @Patch(':id')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
   update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateInsumoDto) {
     return this.service.updateInsumo(id, dto);
   }
 
   @Delete(':id')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.service.deleteInsumo(id);
   }

@@ -759,7 +759,7 @@ export default function AdminPedidoBalcaoPage() {
 
   const cashTurnBlocking = useMemo(
     () =>
-      (meRole === "ADMIN" || meRole === "ATTENDANT") &&
+      (meRole === "ADMIN" || meRole === "MANAGER" || meRole === "ATTENDANT") &&
       pdvCashSessionOpen !== true,
     [meRole, pdvCashSessionOpen],
   );
@@ -989,7 +989,7 @@ export default function AdminPedidoBalcaoPage() {
   }, []);
 
   useEffect(() => {
-    if (meRole === "ADMIN" || meRole === "ATTENDANT") {
+    if (meRole === "ADMIN" || meRole === "MANAGER" || meRole === "ATTENDANT") {
       void refreshCounterDrafts();
     }
   }, [meRole, refreshCounterDrafts]);
@@ -1722,7 +1722,7 @@ export default function AdminPedidoBalcaoPage() {
           </Link>
         </div>
 
-      {meRole === "ADMIN" || meRole === "ATTENDANT" ? (
+      {(meRole === "ADMIN" || meRole === "MANAGER" || meRole === "ATTENDANT") ? (
         <BalcaoOperationsPanel
           pdvCashSessionOpen={pdvCashSessionOpen}
           onOpenCashDialog={() => {
@@ -2546,7 +2546,7 @@ export default function AdminPedidoBalcaoPage() {
       </div>
 
       {openCashDialogOpen &&
-      (meRole === "ADMIN" || meRole === "ATTENDANT") ? (
+      (meRole === "ADMIN" || meRole === "MANAGER" || meRole === "ATTENDANT") ? (
         <div
           className="fixed inset-0 z-[85] flex items-center justify-center p-4"
           role="presentation"

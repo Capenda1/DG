@@ -27,7 +27,7 @@ import { ProductsService } from './products.service';
 
 @Controller('admin/products')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.ADMIN)
+@Roles(UserRole.ADMIN, UserRole.MANAGER)
 export class AdminProductsController {
   constructor(private readonly products: ProductsService) {}
 

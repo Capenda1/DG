@@ -15,6 +15,8 @@ enum UserRole {
   DESIGNER
   ATTENDANT
   ADMIN
+  /// Gerente: operação completa excepto gestão de utilizadores e configurações globais.
+  MANAGER
   /// Colaborador interno (RH, ponto, salários) sem login na aplicação.
   COLLABORATOR
 }
@@ -101,6 +103,7 @@ enum NotificationChannel {
   EMAIL
   SMS
   WHATSAPP
+  PUSH
 }
 
 enum NotificationStatus {
@@ -161,6 +164,7 @@ model User {
   passwordResetTokens        PasswordResetToken[]
   notifications              Notification[]           @relation("NotificationRecipient")
   notificationsSent          Notification[]           @relation("NotificationSentBy")
+  pushTokens                 DevicePushToken[]
   designTemplates            DesignTemplate[]
   clientGalleryItems         ClientGalleryItem[]
   messagesSent               Message[]                @relation("MessageSender")
@@ -308,6 +312,8 @@ model Order {
   /// Código de rastreio agregado (pode redundar com shipping.tracking_code)
   trackingCode              String?               @map("tracking_code")
   notes                     String?
+  /// Chave do cliente para repetir a criação sem duplicar o pedido.
+  clientMutationId          String?               @unique @map("client_mutation_id") @db.Uuid
   /// Data/hora de recepção do pedido (PDV — preenchida manualmente pelo atendente).
   receptionDate             DateTime?             @map("reception_date")
   /// Especificações extra da modelagem (JSON v1 — ver `orders.service` / parse `modelagemSpecs`).
@@ -723,6 +729,20 @@ model Notification {
   @@index([orderId])
   @@index([channel, status])
   @@map("notifications")
+}
+
+model DevicePushToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  token     String   @unique
+  platform  String   @default("ANDROID")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("device_push_tokens")
 }
 
 model Message {

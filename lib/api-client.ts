@@ -366,6 +366,7 @@ export type UserRole =
   | "DESIGNER"
   | "ATTENDANT"
   | "ADMIN"
+  | "MANAGER"
   | "COLLABORATOR";
 
 export type AdminUserListItem = AuthSession["user"] & {

@@ -37,6 +37,10 @@ import type {
 } from './dto/create-order.dto';
 import type { SaveCompositionDto } from './dto/save-composition.dto';
 import { parseAndValidateModelagemSpecs } from './modelagem-specs.validation';
+import {
+  isAdminManagerOrAttendant,
+  isAdminOrManager,
+} from '../../common/staff-roles';
 
 /** Ficheiro em memória (multer memoryStorage). */
 export type MemoryUploadedFile = {
@@ -45,6 +49,32 @@ export type MemoryUploadedFile = {
   originalname: string;
   size: number;
 };
+
+function clientStatusPush(
+  status: OrderStatus,
+  orderNumber: string,
+): { title: string; body: string } | null {
+  if (status === OrderStatus.FINISHED) {
+    return {
+      title: 'A peça está pronta',
+      body: `O pedido ${orderNumber} está pronto para recolha.`,
+    };
+  }
+  const label: Partial<Record<OrderStatus, string>> = {
+    [OrderStatus.SUBMITTED]: 'Submetido',
+    [OrderStatus.VALIDATION_PAYMENT]: 'Validação e pagamento',
+    [OrderStatus.APPROVED]: 'Aprovado',
+    [OrderStatus.IN_PRODUCTION]: 'Em produção',
+    [OrderStatus.DELIVERED]: 'Entregue',
+    [OrderStatus.CANCELLED]: 'Cancelado',
+  };
+  const text = label[status];
+  if (!text) return null;
+  return {
+    title: `Pedido ${text.toLowerCase()}`,
+    body: `O pedido ${orderNumber} passou a ${text}.`,
+  };
+}
 
 @Injectable()
 export class OrdersService {
@@ -125,7 +155,7 @@ export class OrdersService {
     orderOrigin: OrderOrigin,
     actorRole: UserRole,
   ): void {
-    if (actorRole === UserRole.ADMIN && orderOrigin === OrderOrigin.ONLINE) {
+    if (isAdminOrManager(actorRole) && orderOrigin === OrderOrigin.ONLINE) {
       throw new ForbiddenException(
         'Pedidos criados online pelo cliente não podem ser eliminados pela administração.',
       );
@@ -193,7 +223,7 @@ export class OrdersService {
       items: { productionProcess: ProductionProcess }[];
     },
   ): boolean {
-    if (role === UserRole.ADMIN) {
+    if (isAdminOrManager(role)) {
       return true;
     }
 
@@ -549,7 +579,7 @@ export class OrdersService {
     dto: QuickBalcaoClientDto,
     actor: { id: string; role: UserRole },
   ) {
-    if (actor.role !== UserRole.ADMIN && actor.role !== UserRole.ATTENDANT) {
+    if (!isAdminManagerOrAttendant(actor.role)) {
       throw new ForbiddenException(
         'Sem permissão para registar clientes no balcão.',
       );
@@ -584,7 +614,7 @@ export class OrdersService {
     dto: CreateCounterOrderDto,
     actor: { id: string; role: UserRole },
   ) {
-    if (actor.role !== UserRole.ADMIN && actor.role !== UserRole.ATTENDANT) {
+    if (!isAdminManagerOrAttendant(actor.role)) {
       throw new ForbiddenException(
         'Sem permissão para criar pedidos de balcão.',
       );
@@ -705,7 +735,7 @@ export class OrdersService {
   ) {
     const balcao = opts.channel === 'BALCAO';
     if (balcao) {
-      if (actor.role !== UserRole.ADMIN && actor.role !== UserRole.ATTENDANT) {
+      if (!isAdminManagerOrAttendant(actor.role)) {
         throw new ForbiddenException(
           'Sem permissão para editar pedidos de balcão.',
         );
@@ -825,6 +855,14 @@ export class OrdersService {
       );
     }
 
+    if (dto.clientMutationId) {
+      const existing = await this.prisma.order.findFirst({
+        where: { clientMutationId: dto.clientMutationId, clientId },
+        include: this.orderDetailInclude(),
+      });
+      if (existing) return existing;
+    }
+
     const orderNumber = await this.allocateOrderNumber();
 
     const { lineData, orderCurrency } = await this.buildOrderItemsFromLines(
@@ -837,19 +875,36 @@ export class OrdersService {
       total += Number(line.unitPrice) * qty;
     }
 
-    const order = await this.prisma.order.create({
-      data: {
-        orderNumber,
-        clientId,
-        orderOrigin: OrderOrigin.ONLINE,
-        status: OrderStatus.DRAFT,
-        totalAmount: new Prisma.Decimal(total),
-        currency: orderCurrency ?? 'AOA',
-        notes: dto.notes?.trim() ? dto.notes.trim() : null,
-        items: { create: lineData },
-      },
-      include: this.orderDetailInclude(),
-    });
+    let order;
+    try {
+      order = await this.prisma.order.create({
+        data: {
+          orderNumber,
+          clientId,
+          orderOrigin: OrderOrigin.ONLINE,
+          status: OrderStatus.DRAFT,
+          totalAmount: new Prisma.Decimal(total),
+          currency: orderCurrency ?? 'AOA',
+          notes: dto.notes?.trim() ? dto.notes.trim() : null,
+          clientMutationId: dto.clientMutationId ?? null,
+          items: { create: lineData },
+        },
+        include: this.orderDetailInclude(),
+      });
+    } catch (err) {
+      if (
+        dto.clientMutationId &&
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        const existing = await this.prisma.order.findFirst({
+          where: { clientMutationId: dto.clientMutationId, clientId },
+          include: this.orderDetailInclude(),
+        });
+        if (existing) return existing;
+      }
+      throw err;
+    }
 
     await this.prisma.auditLog.create({
       data: {
@@ -869,7 +924,7 @@ export class OrdersService {
    * Rascunhos de balcão (DRAFT) por criador: atendente vê só os seus; admin vê todos os de balcão em rascunho.
    */
   listCounterDraftSummaries(actor: { id: string; role: UserRole }) {
-    if (actor.role !== UserRole.ADMIN && actor.role !== UserRole.ATTENDANT) {
+    if (!isAdminManagerOrAttendant(actor.role)) {
       throw new ForbiddenException(
         'Sem permissão para listar rascunhos de balcão.',
       );
@@ -911,7 +966,7 @@ export class OrdersService {
     orderId: string,
     actor: { id: string; role: UserRole },
   ) {
-    if (actor.role !== UserRole.ADMIN && actor.role !== UserRole.ATTENDANT) {
+    if (!isAdminManagerOrAttendant(actor.role)) {
       throw new ForbiddenException(
         'Apenas administrador ou atendente podem partilhar o rascunho com a equipa de design.',
       );
@@ -1235,7 +1290,7 @@ export class OrdersService {
       status !== OrderStatus.DELIVERED &&
       status !== OrderStatus.CANCELLED &&
       status !== OrderStatus.DRAFT &&
-      (actor.role === UserRole.ADMIN || actor.role === UserRole.ATTENDANT)
+      (isAdminManagerOrAttendant(actor.role))
     ) {
       if (!candidates.includes(OrderStatus.DELIVERED)) {
         candidates.push(OrderStatus.DELIVERED);
@@ -1551,6 +1606,21 @@ export class OrdersService {
         .catch(() => undefined);
     }
 
+    if (updated.clientId !== actor.id) {
+      const push = clientStatusPush(nextStatus, updated.orderNumber);
+      if (push) {
+        void this.notifications
+          .notifyClientPush({
+            userId: updated.clientId,
+            orderId: updated.id,
+            title: push.title,
+            body: push.body,
+            kind: 'ORDER_STATUS',
+          })
+          .catch(() => undefined);
+      }
+    }
+
     return updated;
   }
 
@@ -1596,9 +1666,9 @@ export class OrdersService {
     actor: { id: string; role: UserRole },
     reasonRaw?: string,
   ) {
-    if (actor.role !== UserRole.ADMIN) {
+    if (!isAdminOrManager(actor.role)) {
       throw new ForbiddenException(
-        'Apenas administradores podem reabrir pedidos cancelados.',
+        'Apenas administradores ou gerentes podem reabrir pedidos cancelados.',
       );
     }
     const order = await this.prisma.order.findUnique({
@@ -1674,9 +1744,9 @@ export class OrdersService {
     notes: string | undefined,
     actor: { id: string; role: UserRole },
   ) {
-    if (actor.role !== UserRole.ADMIN) {
+    if (!isAdminOrManager(actor.role)) {
       throw new ForbiddenException(
-        'Apenas administradores podem definir o valor do pedido.',
+        'Apenas administradores ou gerentes podem definir o valor do pedido.',
       );
     }
     const order = await this.prisma.order.findUnique({
@@ -1733,7 +1803,7 @@ export class OrdersService {
       order.orderOrigin === OrderOrigin.BALCAO &&
       order.attendantId === actor.id;
     const allowed =
-      actor.role === UserRole.ADMIN ||
+      isAdminOrManager(actor.role) ||
       (actor.role === UserRole.CLIENT &&
         order.clientId === actor.id &&
         order.status === OrderStatus.DRAFT) ||
@@ -1779,7 +1849,7 @@ export class OrdersService {
       paymentMethod?: PaymentMethod;
     },
   ) {
-    if (actor.role !== UserRole.ADMIN && actor.role !== UserRole.ATTENDANT) {
+    if (!isAdminManagerOrAttendant(actor.role)) {
       throw new ForbiddenException(
         'Apenas administrador ou atendente podem gravar uma pró-forma.',
       );
@@ -1914,13 +1984,10 @@ export class OrdersService {
         throw new ForbiddenException('Sem permissão para este pedido.');
       }
       this.assertClientCannotMutateBalcaoOrder(order, actor);
-    } else if (
-      actor.role === UserRole.ADMIN ||
-      actor.role === UserRole.ATTENDANT
-    ) {
+    } else if (isAdminManagerOrAttendant(actor.role)) {
       if (order.orderOrigin !== OrderOrigin.BALCAO) {
         throw new ForbiddenException(
-          'Só pedidos criados no balcão podem ser submetidos pelo atendente ou administrador.',
+          'Só pedidos criados no balcão podem ser submetidos pelo atendente, gerente ou administrador.',
         );
       }
       if (actor.role === UserRole.ATTENDANT && order.attendantId !== actor.id) {
@@ -2034,7 +2101,7 @@ export class OrdersService {
 
     let discountToApply = 0;
     if (order.orderOrigin === OrderOrigin.BALCAO) {
-      if (actor.role === UserRole.ADMIN || actor.role === UserRole.ATTENDANT) {
+      if (isAdminManagerOrAttendant(actor.role)) {
         discountToApply =
           balcaoDiscountAmount !== undefined && balcaoDiscountAmount !== null
             ? balcaoDiscountAmount
@@ -2061,7 +2128,7 @@ export class OrdersService {
 
     const staffBalcaoSubmit =
       order.orderOrigin === OrderOrigin.BALCAO &&
-      (actor.role === UserRole.ADMIN || actor.role === UserRole.ATTENDANT);
+      (isAdminManagerOrAttendant(actor.role));
 
     let notesToApply: string | null | undefined;
     if (staffBalcaoSubmit && balcaoNotes !== undefined) {
@@ -2246,10 +2313,7 @@ export class OrdersService {
       }
       this.assertClientCannotMutateBalcaoOrder(order, user);
       this.assertClientModelagemDraftOnly(order.status);
-    } else if (
-      user.role === UserRole.ADMIN ||
-      user.role === UserRole.ATTENDANT
-    ) {
+    } else if (isAdminManagerOrAttendant(user.role)) {
       if (user.role === UserRole.ATTENDANT) {
         if (
           order.orderOrigin !== OrderOrigin.BALCAO ||
@@ -2507,16 +2571,13 @@ export class OrdersService {
         );
       }
       this.assertClientModelagemDraftOnly(order.status);
-    } else if (
-      user.role === UserRole.ADMIN ||
-      user.role === UserRole.ATTENDANT
-    ) {
+    } else if (isAdminManagerOrAttendant(user.role)) {
       if (
         order.status !== OrderStatus.DRAFT ||
         order.orderOrigin !== OrderOrigin.BALCAO
       ) {
         throw new ForbiddenException(
-          'Administrador e atendente só podem guardar composição em rascunhos de pedidos de balcão.',
+          'Administrador, gerente e atendente só podem guardar composição em rascunhos de pedidos de balcão.',
         );
       }
       if (

@@ -81,7 +81,7 @@ export default function AdminCaixaPage() {
     setMeRole(loadSession()?.user?.role ?? null);
   }, []);
 
-  const isAdmin = meRole === "ADMIN";
+  const isAdmin = (meRole === "ADMIN" || meRole === "MANAGER");
 
   const loadHistory = useCallback(async () => {
     try {
@@ -123,7 +123,7 @@ export default function AdminCaixaPage() {
   useEffect(() => {
     if (meRole !== "ADMIN" && meRole !== "ATTENDANT") return;
     void loadSessionData();
-    if (meRole === "ADMIN") void loadHistory();
+    if ((meRole === "ADMIN" || meRole === "MANAGER")) void loadHistory();
     else setHistory([]);
   }, [meRole, loadSessionData, loadHistory]);
 

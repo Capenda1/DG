@@ -37,7 +37,7 @@ import {
 
 @Controller('rh')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.ADMIN)
+@Roles(UserRole.ADMIN, UserRole.MANAGER)
 export class RhController {
   constructor(private readonly rh: RhService) {}
 

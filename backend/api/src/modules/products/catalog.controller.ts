@@ -8,7 +8,7 @@ import { ProductsService } from './products.service';
 /** Catálogo para cliente (novo pedido) e equipa operacional — não disponível ao perfil DESIGNER. */
 @Controller('catalog')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.ADMIN, UserRole.ATTENDANT, UserRole.CLIENT)
+@Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.ATTENDANT, UserRole.CLIENT)
 export class CatalogController {
   constructor(private readonly products: ProductsService) {}
 

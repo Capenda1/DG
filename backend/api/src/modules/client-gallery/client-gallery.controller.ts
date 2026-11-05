@@ -28,9 +28,13 @@ import { UpdateClientGalleryItemDto } from './dto/update-client-gallery-item.dto
 type AuthUser = { id: string; role: UserRole };
 
 function requireGalleryManager(user: AuthUser) {
-  if (user.role !== 'ADMIN' && user.role !== 'DESIGNER') {
+  if (
+    user.role !== 'ADMIN' &&
+    user.role !== 'MANAGER' &&
+    user.role !== 'DESIGNER'
+  ) {
     throw new ForbiddenException(
-      'Apenas Admin ou Designer podem gerir a galeria.',
+      'Apenas Admin, Gerente ou Designer podem gerir a galeria.',
     );
   }
 }

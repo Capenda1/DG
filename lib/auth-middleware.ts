@@ -9,6 +9,7 @@ import {
   normalizeUserRole,
   pathnameAllowedForAttendantRole,
   pathnameAllowedForDesignerRole,
+  pathnameDeniedForManagerRole,
   ROUTES,
 } from "./routes";
 
@@ -80,6 +81,9 @@ export function resolveProtectedRedirect(
       return adminHomePathForRole(role);
     }
     if (role === "ATTENDANT" && !pathnameAllowedForAttendantRole(p)) {
+      return adminHomePathForRole(role);
+    }
+    if (role === "MANAGER" && pathnameDeniedForManagerRole(p)) {
       return adminHomePathForRole(role);
     }
     return null;

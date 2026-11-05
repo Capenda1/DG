@@ -153,6 +153,8 @@ function estadoAvancoHintForRole(role: string | undefined): string | null {
       return "Como atendente podes avançar o pedido: validação de pagamento, aprovado, em produção, finalizado e entregue.";
     case "DESIGNER":
       return "Como designer geres aprovação, produção e finalizado; a entrega ao cliente pode ser registada por qualquer perfil da equipa quando o pedido estiver finalizado.";
+    case "MANAGER":
+      return "Como gerente podes avançar todas as transições do fluxo (sem gestão de utilizadores nem configurações globais).";
     case "ADMIN":
       return "Como administrador tens acesso a todas as transições do fluxo.";
     default:
@@ -782,7 +784,8 @@ function OrderDetailPanel({
                 <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-zinc-700 border-t-amber-400" />
                 A carregar acções permitidas…
               </div>
-            ) : order.status === "CANCELLED" && sessionRole === "ADMIN" ? (
+            ) : order.status === "CANCELLED" &&
+              (sessionRole === "ADMIN" || sessionRole === "MANAGER") ? (
               <div className="flex flex-wrap items-center gap-2">
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-600">
                   Pedido cancelado
