@@ -193,7 +193,7 @@ const NAV_ATTENDANT_GROUPS: NavGroup[] = [
   },
 ];
 
-/** Menu gerente: igual ao admin, sem Utilizadores nem Configurações Globais. */
+/** Menu gerente: igual ao admin, sem Utilizadores, Configurações Globais nem RH. */
 const NAV_MANAGER_GROUPS: NavGroup[] = ADMIN_NAV_GROUPS.map((group) => {
   if (group.title !== "Administrativo") return group;
   return {
@@ -201,7 +201,8 @@ const NAV_MANAGER_GROUPS: NavGroup[] = ADMIN_NAV_GROUPS.map((group) => {
     items: group.items.filter(
       (item) =>
         item.href !== ROUTES.admin.utilizadores &&
-        item.href !== ROUTES.admin.configuracoes,
+        item.href !== ROUTES.admin.configuracoes &&
+        item.href !== ROUTES.admin.rh,
     ),
   };
 }).filter((group) => group.items.length > 0);

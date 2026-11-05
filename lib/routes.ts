@@ -79,10 +79,11 @@ export function isAdminOrManagerRole(role: string | undefined | null): boolean {
   return r === "ADMIN" || r === "MANAGER";
 }
 
-/** Rotas /admin bloqueadas ao gerente (gestão de contas e configurações globais). */
+/** Rotas /admin bloqueadas ao gerente. */
 export const MANAGER_ADMIN_DENIED_HREFS = [
   ROUTES.admin.utilizadores,
   ROUTES.admin.configuracoes,
+  ROUTES.admin.rh,
 ] as const;
 
 export function pathnameDeniedForManagerRole(pathname: string): boolean {
