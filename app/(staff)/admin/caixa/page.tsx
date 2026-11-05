@@ -264,11 +264,16 @@ export default function AdminCaixaPage() {
     }
   }
 
-  if (meRole && meRole !== "ADMIN" && meRole !== "ATTENDANT") {
+  if (
+    meRole &&
+    meRole !== "ADMIN" &&
+    meRole !== "MANAGER" &&
+    meRole !== "ATTENDANT"
+  ) {
     return (
       <div className="min-h-[40vh] px-4 py-12">
         <p className="text-center text-sm text-zinc-600 dark:text-zinc-400">
-          Apenas administrador ou atendente pode aceder ao caixa.
+          Apenas administrador, gerente ou atendente pode aceder ao caixa.
         </p>
       </div>
     );

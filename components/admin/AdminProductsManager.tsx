@@ -242,7 +242,10 @@ function syncProductUrlParam(productId: string | null): void {
 }
 
 export function AdminProductsManager() {
-  const isAdmin = loadSession()?.user.role === "ADMIN";
+  const isAdmin = (() => {
+    const r = loadSession()?.user.role;
+    return r === "ADMIN" || r === "MANAGER";
+  })();
   const confirmAction = useAnimatedConfirm();
   const searchParams = useSearchParams();
   const initialProductId = searchParams.get("p")?.trim() || null;
@@ -514,7 +517,7 @@ export function AdminProductsManager() {
   if (!isAdmin) {
     return (
       <div className="p-6 text-sm text-zinc-500">
-        Apenas administradores podem gerir produtos.
+        Apenas administradores e gerentes podem gerir produtos.
       </div>
     );
   }

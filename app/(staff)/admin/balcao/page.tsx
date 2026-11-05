@@ -719,7 +719,11 @@ export default function AdminPedidoBalcaoPage() {
   }, []);
 
   const refreshPdvCashSession = useCallback(async () => {
-    if (meRole !== "ADMIN" && meRole !== "ATTENDANT") {
+    if (
+      meRole !== "ADMIN" &&
+      meRole !== "MANAGER" &&
+      meRole !== "ATTENDANT"
+    ) {
       setPdvCashSessionOpen(undefined);
       return;
     }
@@ -789,7 +793,13 @@ export default function AdminPedidoBalcaoPage() {
   }, [openCashFloatInput, refreshPdvCashSession]);
 
   useEffect(() => {
-    if (meRole !== "ADMIN" && meRole !== "ATTENDANT") return;
+    if (
+      meRole !== "ADMIN" &&
+      meRole !== "MANAGER" &&
+      meRole !== "ATTENDANT"
+    ) {
+      return;
+    }
     let cancelled = false;
     void listCounterInsumos()
       .then((rows) => {
@@ -1658,11 +1668,16 @@ export default function AdminPedidoBalcaoPage() {
     }
   }
 
-  if (meRole && meRole !== "ADMIN" && meRole !== "ATTENDANT") {
+  if (
+    meRole &&
+    meRole !== "ADMIN" &&
+    meRole !== "MANAGER" &&
+    meRole !== "ATTENDANT"
+  ) {
     return (
       <div className="min-h-[50vh] px-4 py-12">
         <div className="mx-auto max-w-lg rounded-xl border border-zinc-200 bg-white px-6 py-14 text-center text-sm text-zinc-600 shadow-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400">
-          Apenas administradores e atendentes podem usar o PDV.
+          Apenas administradores, gerentes e atendentes podem usar o PDV.
         </div>
       </div>
     );

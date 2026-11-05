@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   HttpCode,
   HttpStatus,
@@ -25,17 +26,36 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { CreateUserDto } from '../auth/dto/create-user.dto';
 import { UsersService } from '../users/users.service';
 
+type AuthedRequest = Request & {
+  user: { id: string; role: UserRole };
+};
+
 @Controller('admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.ADMIN)
+@Roles(UserRole.ADMIN, UserRole.MANAGER)
 export class AdminController {
   constructor(
     private readonly auth: AuthService,
     private readonly users: UsersService,
   ) {}
 
+  /** Gerente: só contas CLIENT. Admin: equipa + clientes. */
+  private assertManagerClientOnly(
+    actorRole: UserRole,
+    targetRole: UserRole | undefined,
+    action: string,
+  ): void {
+    if (actorRole !== UserRole.MANAGER) return;
+    if (targetRole !== UserRole.CLIENT) {
+      throw new ForbiddenException(
+        `O gerente só pode ${action} contas de cliente.`,
+      );
+    }
+  }
+
   @Get('users')
   listUsers(
+    @Req() req: AuthedRequest,
     @Query('q') q?: string,
     @Query('role') roleParam?: string,
     @Query('excludeRole') excludeRoleParam?: string,
@@ -55,6 +75,17 @@ export class AdminController {
       }
       excludeRole = excludeRoleParam as UserRole;
     }
+
+    if (req.user.role === UserRole.MANAGER) {
+      if (role != null && role !== UserRole.CLIENT) {
+        throw new ForbiddenException(
+          'O gerente só pode listar contas de cliente.',
+        );
+      }
+      role = UserRole.CLIENT;
+      excludeRole = undefined;
+    }
+
     return this.users.findManyForAdmin({
       search: q,
       role,
@@ -75,10 +106,8 @@ export class AdminController {
 
   @Post('users')
   @HttpCode(HttpStatus.CREATED)
-  createUser(
-    @Body() dto: CreateUserDto,
-    @Req() req: Request & { user: { id: string } },
-  ) {
+  createUser(@Body() dto: CreateUserDto, @Req() req: AuthedRequest) {
+    this.assertManagerClientOnly(req.user.role, dto.role, 'criar');
     return this.auth.createUserByAdmin(
       dto,
       req.user.id,
@@ -89,11 +118,23 @@ export class AdminController {
 
   @Patch('users/:id')
   @HttpCode(HttpStatus.OK)
-  updateUser(
+  async updateUser(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @Body() dto: AdminUpdateUserDto,
-    @Req() req: Request & { user: { id: string } },
+    @Req() req: AuthedRequest,
   ) {
+    if (req.user.role === UserRole.MANAGER) {
+      const current = await this.users.findById(id);
+      if (!current) {
+        throw new BadRequestException('Utilizador não encontrado.');
+      }
+      this.assertManagerClientOnly(req.user.role, current.role, 'alterar');
+      if (dto.role !== undefined && dto.role !== UserRole.CLIENT) {
+        throw new ForbiddenException(
+          'O gerente não pode alterar o perfil de uma conta de cliente.',
+        );
+      }
+    }
     return this.auth.updateUserByAdmin(
       id,
       dto,
@@ -108,8 +149,19 @@ export class AdminController {
   async resetPassword(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @Body() dto: AdminResetPasswordDto,
-    @Req() req: Request & { user: { id: string } },
+    @Req() req: AuthedRequest,
   ) {
+    if (req.user.role === UserRole.MANAGER) {
+      const current = await this.users.findById(id);
+      if (!current) {
+        throw new BadRequestException('Utilizador não encontrado.');
+      }
+      this.assertManagerClientOnly(
+        req.user.role,
+        current.role,
+        'repor a palavra-passe de',
+      );
+    }
     await this.auth.resetUserPasswordByAdmin(
       id,
       dto.newPassword,
@@ -123,8 +175,15 @@ export class AdminController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async deleteUser(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
-    @Req() req: Request & { user: { id: string } },
+    @Req() req: AuthedRequest,
   ) {
+    if (req.user.role === UserRole.MANAGER) {
+      const current = await this.users.findById(id);
+      if (!current) {
+        throw new BadRequestException('Utilizador não encontrado.');
+      }
+      this.assertManagerClientOnly(req.user.role, current.role, 'eliminar');
+    }
     await this.auth.deleteUserByAdmin(
       id,
       req.user.id,

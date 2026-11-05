@@ -73,6 +73,12 @@ export function isStaffRole(role: string): boolean {
   );
 }
 
+/** Administrador ou gerente (operação alargada). */
+export function isAdminOrManagerRole(role: string | undefined | null): boolean {
+  const r = normalizeUserRole(role);
+  return r === "ADMIN" || r === "MANAGER";
+}
+
 /** Rotas /admin bloqueadas ao gerente (gestão de contas e configurações globais). */
 export const MANAGER_ADMIN_DENIED_HREFS = [
   ROUTES.admin.utilizadores,
