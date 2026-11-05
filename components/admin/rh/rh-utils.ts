@@ -8,6 +8,7 @@ import type {
 
 export const ROLE_LABELS: Record<UserRole, string> = {
   ADMIN: "Administrador",
+  MANAGER: "Gerente",
   ATTENDANT: "Atendente",
   DESIGNER: "Designer",
   CLIENT: "Cliente",
