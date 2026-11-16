@@ -67,6 +67,7 @@ const ROLE_DEFAULTS: Record<
   { cargo: string; departamento: string }
 > = {
   [UserRole.ADMIN]: { cargo: 'Administrador', departamento: 'Direção' },
+  [UserRole.MANAGER]: { cargo: 'Gerente', departamento: 'Direção' },
   [UserRole.ATTENDANT]: { cargo: 'Atendente', departamento: 'Balcão' },
   [UserRole.DESIGNER]: { cargo: 'Designer', departamento: 'Produção & design' },
   [UserRole.COLLABORATOR]: { cargo: 'Colaborador', departamento: 'Operações' },
@@ -395,7 +396,10 @@ export class RhService {
   ): RhCollaboratorView {
     const roleDefaults =
       user.role !== UserRole.CLIENT
-        ? ROLE_DEFAULTS[user.role as Exclude<UserRole, 'CLIENT'>]
+        ? (ROLE_DEFAULTS[user.role as Exclude<UserRole, 'CLIENT'>] ?? {
+            cargo: 'Colaborador',
+            departamento: 'Operações',
+          })
         : { cargo: '—', departamento: '—' };
 
     return {
